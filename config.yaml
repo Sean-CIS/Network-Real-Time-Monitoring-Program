@@ -39,3 +39,4 @@ alerts:
   bandwidth_threshold_mbps: 100   # Alert if bandwidth exceeds this
   latency_threshold_ms: 200       # Alert if ping exceeds this
   device_offline_timeout_s: 60    # Alert if device not seen for this long
+  cooldown_s: 300                 # Suppress duplicate alerts for 5 minutes

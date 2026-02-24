@@ -1,3 +1,4 @@
+import time
 from datetime import datetime
 
 from PySide6.QtCore import Signal, QObject
@@ -15,13 +16,16 @@ class AlertEngine(QObject):
         self._bandwidth_threshold_mbps = 100.0
         self._latency_threshold_ms = 200.0
         self._device_offline_timeout_s = 60.0
+        self._cooldown_period_s = 300.0
+        self._cooldowns: dict[str, float] = {}
         self._known_devices: set[str] = set()
 
     def configure(self, bandwidth_mbps: float = 100.0, latency_ms: float = 200.0,
-                  offline_timeout_s: float = 60.0):
+                  offline_timeout_s: float = 60.0, cooldown_s: float = 300.0):
         self._bandwidth_threshold_mbps = bandwidth_mbps
         self._latency_threshold_ms = latency_ms
         self._device_offline_timeout_s = offline_timeout_s
+        self._cooldown_period_s = cooldown_s
 
     def check_bandwidth(self, data: dict):
         """Check bandwidth data for threshold violations."""
@@ -88,6 +92,12 @@ class AlertEngine(QObject):
         self._known_devices = current_ips
 
     def _emit_alert(self, alert_type: str, severity: str, message: str, source: str = ""):
+        key = f"{alert_type}:{source}"
+        now = time.time()
+        if now - self._cooldowns.get(key, 0) < self._cooldown_period_s:
+            return
+        self._cooldowns[key] = now
+
         alert = {
             "timestamp": datetime.now().isoformat(),
             "alert_type": alert_type,

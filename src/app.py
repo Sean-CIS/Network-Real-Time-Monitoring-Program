@@ -164,7 +164,8 @@ class NetworkMonitorApp:
         bw_thresh = get("alerts", "bandwidth_threshold_mbps", 100)
         lat_thresh = get("alerts", "latency_threshold_ms", 200)
         offline_timeout = get("alerts", "device_offline_timeout_s", 60)
-        self._alert_engine.configure(bw_thresh, lat_thresh, offline_timeout)
+        cooldown = get("alerts", "cooldown_s", 300)
+        self._alert_engine.configure(bw_thresh, lat_thresh, offline_timeout, cooldown)
 
         self._alert_engine.alert_triggered.connect(self._on_alert)
         self._window.alerts_view.clear_button.clicked.connect(self._clear_alerts)

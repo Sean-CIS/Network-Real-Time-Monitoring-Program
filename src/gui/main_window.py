@@ -10,6 +10,7 @@ from src.gui.bandwidth_view import BandwidthView
 from src.gui.connections_view import ConnectionsView
 from src.gui.dashboard import DashboardView
 from src.gui.devices_view import DevicesView
+from src.gui.dns_view import DNSView
 from src.gui.latency_view import LatencyView
 from src.gui.packets_view import PacketsView
 from src.gui.ports_view import PortsView
@@ -63,6 +64,7 @@ class MainWindow(QMainWindow):
         self.packets_view = PacketsView()
         self.security_events_view = SecurityEventsView()
         self.connections_view = ConnectionsView()
+        self.dns_view = DNSView()
         self.alerts_view = AlertsView()
 
         # Add tabs
@@ -74,6 +76,7 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(self.packets_view, "Packet Capture")
         self._tabs.addTab(self.security_events_view, "Security Events")
         self._tabs.addTab(self.connections_view, "Connections")
+        self._tabs.addTab(self.dns_view, "DNS History")
         self._tabs.addTab(self.alerts_view, "Alerts")
 
         self.setCentralWidget(self._tabs)

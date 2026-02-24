@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
 
 from src.gui.widgets.live_chart import LiveChart
 from src.gui.widgets.stat_card import StatCard
+from src.gui.widgets.traffic_heatmap import TrafficHeatmap
 
 
 # Threshold (in bytes/s) above which the dashboard chart switches to MB/s
@@ -77,23 +78,32 @@ class DashboardView(QWidget):
         super().__init__(parent)
         layout = QVBoxLayout(self)
 
-        # Title
+        # Title row with baseline mode indicator
+        title_row = QHBoxLayout()
         title = QLabel("Network Monitor Dashboard")
         title.setStyleSheet(
             "color: #cdd6f4; font-size: 18px; font-weight: bold; padding: 8px;"
         )
-        layout.addWidget(title)
+        title_row.addWidget(title)
+
+        self._baseline_indicator = QLabel("")
+        self._baseline_indicator.setStyleSheet(
+            "color: #f9e2af; font-size: 12px; padding: 8px;"
+        )
+        title_row.addWidget(self._baseline_indicator)
+        title_row.addStretch()
+        layout.addLayout(title_row)
 
         # Network info row
         net_cards_layout = QHBoxLayout()
-        self._card_local_ip = StatCard("Local IP", "—")
-        self._card_subnet = StatCard("Subnet", "—")
-        self._card_download = StatCard("Download", "—")
-        self._card_upload = StatCard("Upload", "—")
-        self._card_latency = StatCard("Avg Latency", "—")
+        self._card_local_ip = StatCard("Local IP", "\u2014")
+        self._card_subnet = StatCard("Subnet", "\u2014")
+        self._card_download = StatCard("Download", "\u2014")
+        self._card_upload = StatCard("Upload", "\u2014")
+        self._card_latency = StatCard("Avg Latency", "\u2014")
         self._card_devices = StatCard("Devices Online", "0")
         self._card_alerts = StatCard("Active Alerts", "0")
-        self._card_security_score = StatCard("Security Score", "—")
+        self._card_security_score = StatCard("Security Score", "\u2014")
         net_cards_layout.addWidget(self._card_local_ip)
         net_cards_layout.addWidget(self._card_subnet)
         net_cards_layout.addWidget(self._card_download)
@@ -132,6 +142,10 @@ class DashboardView(QWidget):
         layout.addWidget(timeline_label)
         self._security_timeline = SecurityTimeline()
         layout.addWidget(self._security_timeline)
+
+        # Traffic heatmap
+        self._traffic_heatmap = TrafficHeatmap()
+        layout.addWidget(self._traffic_heatmap)
 
         self._use_mb = False
 
@@ -189,7 +203,6 @@ class DashboardView(QWidget):
             color = "#f9e2af"  # yellow
         else:
             color = "#f38ba8"  # red
-        # Update the value label color in the StatCard
         for child in self._card_security_score.findChildren(QLabel):
             if child.text() == str(score):
                 child.setStyleSheet(
@@ -199,3 +212,20 @@ class DashboardView(QWidget):
 
     def update_security_timeline(self, hourly_data: list[dict]):
         self._security_timeline.set_data(hourly_data)
+
+    def update_traffic_heatmap(self, heatmap_data: list[dict]):
+        self._traffic_heatmap.set_data(heatmap_data)
+
+    def update_baseline_mode(self, mode: str):
+        if mode == "learning":
+            self._baseline_indicator.setText("Baseline: Learning Mode")
+            self._baseline_indicator.setStyleSheet(
+                "color: #f9e2af; font-size: 12px; padding: 8px;"
+            )
+        elif mode == "monitoring":
+            self._baseline_indicator.setText("Baseline: Monitoring Mode")
+            self._baseline_indicator.setStyleSheet(
+                "color: #a6e3a1; font-size: 12px; padding: 8px;"
+            )
+        else:
+            self._baseline_indicator.setText("")

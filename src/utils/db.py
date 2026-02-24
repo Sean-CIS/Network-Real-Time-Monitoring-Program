@@ -18,6 +18,7 @@ def get_connection() -> sqlite3.Connection:
         _local.conn = sqlite3.connect(_DB_PATH)
         _local.conn.row_factory = sqlite3.Row
         _local.conn.execute("PRAGMA journal_mode=WAL")
+        _local.conn.execute("PRAGMA synchronous=NORMAL")
     return _local.conn
 
 
@@ -101,10 +102,28 @@ def init_db():
             is_trusted INTEGER DEFAULT 0
         );
 
+        CREATE TABLE IF NOT EXISTS dns_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            query TEXT NOT NULL,
+            query_type TEXT,
+            response TEXT,
+            ttl INTEGER,
+            source_ip TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS network_baseline (
+            metric TEXT PRIMARY KEY,
+            value_json TEXT,
+            updated_at TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_bandwidth_ts ON bandwidth_history(timestamp);
         CREATE INDEX IF NOT EXISTS idx_latency_ts ON latency_history(timestamp);
         CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts(timestamp);
         CREATE INDEX IF NOT EXISTS idx_secevt_ts ON security_events(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_dns_ts ON dns_history(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_dns_query ON dns_history(query);
     """
     )
     conn.commit()
@@ -306,3 +325,89 @@ def get_trusted_macs() -> set[str]:
         "SELECT mac FROM device_baseline WHERE is_trusted = 1"
     ).fetchall()
     return {r["mac"] for r in rows}
+
+
+# ── DNS History ────────────────────────────────────────────
+
+
+def insert_dns_record(query: str, query_type: str = "", response: str = "",
+                      ttl: int = 0, source_ip: str = ""):
+    if not query:
+        return
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO dns_history (timestamp, query, query_type, response, ttl, source_ip) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (datetime.now().isoformat(), query, query_type, response, ttl, source_ip),
+    )
+    conn.commit()
+
+
+def get_recent_dns(limit: int = 500) -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM dns_history ORDER BY timestamp DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def search_dns(query_filter: str, limit: int = 500) -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM dns_history WHERE query LIKE ? ORDER BY timestamp DESC LIMIT ?",
+        (f"%{query_filter}%", limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_dns_stats() -> dict:
+    conn = get_connection()
+    total = conn.execute("SELECT COUNT(*) FROM dns_history").fetchone()[0]
+    unique = conn.execute("SELECT COUNT(DISTINCT query) FROM dns_history").fetchone()[0]
+    nxdomain = conn.execute(
+        "SELECT COUNT(*) FROM dns_history WHERE response = '' OR response IS NULL"
+    ).fetchone()[0]
+    return {"total": total, "unique_domains": unique, "nxdomain": nxdomain}
+
+
+# ── Network Baseline ──────────────────────────────────────
+
+
+def upsert_baseline_metric(metric: str, value_json: str):
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO network_baseline (metric, value_json, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(metric) DO UPDATE SET
+             value_json = excluded.value_json,
+             updated_at = excluded.updated_at""",
+        (metric, value_json, datetime.now().isoformat()),
+    )
+    conn.commit()
+
+
+def get_baseline_metric(metric: str) -> Optional[str]:
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT value_json FROM network_baseline WHERE metric = ?", (metric,)
+    ).fetchone()
+    return row["value_json"] if row else None
+
+
+# ── Bandwidth Heatmap ─────────────────────────────────────
+
+
+def get_bandwidth_heatmap_data() -> list[dict]:
+    """Get hourly bandwidth aggregated by day-of-week (0=Mon) and hour."""
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT
+             CAST(strftime('%w', timestamp) AS INTEGER) as dow,
+             CAST(strftime('%H', timestamp) AS INTEGER) as hour,
+             AVG(speed_down + speed_up) as avg_bps
+           FROM bandwidth_history
+           WHERE timestamp >= datetime('now', '-7 days')
+           GROUP BY dow, hour
+           ORDER BY dow, hour"""
+    ).fetchall()
+    return [dict(r) for r in rows]

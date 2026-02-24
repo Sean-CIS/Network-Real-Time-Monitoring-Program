@@ -1,12 +1,20 @@
+"""Security Events view with active threat dashboard and firewall rule suggestions."""
+
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
+    QDialog,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
+    QLabel,
+    QMenu,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -19,11 +27,143 @@ _SEVERITY_COLORS = {
     "info": QColor("#94e2d5"),
 }
 
+_THREAT_LEVELS = {
+    "safe": ("#a6e3a1", "SAFE"),
+    "elevated": ("#f9e2af", "ELEVATED"),
+    "critical": ("#f38ba8", "CRITICAL"),
+}
+
+
+class ThreatDashboard(QWidget):
+    """Compact threat level dashboard panel."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+
+        # Threat level badge
+        self._level_label = QLabel("SAFE")
+        self._level_label.setStyleSheet(
+            "color: #a6e3a1; font-size: 16px; font-weight: bold; padding: 4px 12px;"
+        )
+        layout.addWidget(self._level_label)
+
+        # Separator
+        sep = QFrame()
+        sep.setFrameShape(QFrame.VLine)
+        sep.setStyleSheet("color: #45475a;")
+        layout.addWidget(sep)
+
+        # Stats
+        self._external_ips = QLabel("External IPs: 0")
+        self._external_ips.setStyleSheet("color: #a6adc8; padding: 0 8px;")
+        layout.addWidget(self._external_ips)
+
+        self._unresolved = QLabel("Unresolved: 0")
+        self._unresolved.setStyleSheet("color: #a6adc8; padding: 0 8px;")
+        layout.addWidget(self._unresolved)
+
+        self._events_24h = QLabel("24h Events: 0")
+        self._events_24h.setStyleSheet("color: #a6adc8; padding: 0 8px;")
+        layout.addWidget(self._events_24h)
+
+        layout.addStretch()
+
+        self.setStyleSheet(
+            "ThreatDashboard { background-color: #181825; "
+            "border: 1px solid #45475a; border-radius: 6px; }"
+        )
+
+    def update_threat_level(self, level: str):
+        """Set threat level: 'safe', 'elevated', or 'critical'."""
+        color, text = _THREAT_LEVELS.get(level, _THREAT_LEVELS["safe"])
+        self._level_label.setText(text)
+        self._level_label.setStyleSheet(
+            f"color: {color}; font-size: 16px; font-weight: bold; padding: 4px 12px;"
+        )
+
+    def update_stats(self, external_ips: int = 0, unresolved: int = 0,
+                     events_24h: int = 0):
+        self._external_ips.setText(f"External IPs: {external_ips}")
+        self._unresolved.setText(f"Unresolved: {unresolved}")
+        self._events_24h.setText(f"24h Events: {events_24h}")
+
+
+class FirewallRuleDialog(QDialog):
+    """Dialog showing generated firewall rules with copy buttons."""
+
+    def __init__(self, rules: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Firewall Rule Suggestion")
+        self.setMinimumWidth(600)
+        self.setStyleSheet(
+            "QDialog { background-color: #1e1e2e; color: #cdd6f4; }"
+            "QLabel { color: #cdd6f4; }"
+            "QTextEdit { background-color: #313244; color: #a6e3a1; "
+            "border: 1px solid #45475a; border-radius: 4px; font-family: monospace; }"
+        )
+
+        layout = QVBoxLayout(self)
+
+        desc = QLabel(rules.get("desc", ""))
+        desc.setWordWrap(True)
+        desc.setStyleSheet("font-size: 13px; padding: 4px;")
+        layout.addWidget(desc)
+
+        # Linux rule
+        layout.addWidget(QLabel("Linux (iptables):"))
+        linux_text = QTextEdit()
+        linux_text.setPlainText(rules.get("linux", ""))
+        linux_text.setReadOnly(True)
+        linux_text.setMaximumHeight(60)
+        layout.addWidget(linux_text)
+
+        linux_copy = QPushButton("Copy Linux Command")
+        linux_copy.setStyleSheet(
+            "QPushButton { background-color: #89b4fa; color: #1e1e2e; "
+            "padding: 6px 12px; border-radius: 4px; font-weight: bold; }"
+        )
+        linux_copy.clicked.connect(
+            lambda: QApplication.clipboard().setText(rules.get("linux", ""))
+        )
+        layout.addWidget(linux_copy)
+
+        # Windows rule
+        layout.addWidget(QLabel("Windows (netsh):"))
+        win_text = QTextEdit()
+        win_text.setPlainText(rules.get("windows", ""))
+        win_text.setReadOnly(True)
+        win_text.setMaximumHeight(60)
+        layout.addWidget(win_text)
+
+        win_copy = QPushButton("Copy Windows Command")
+        win_copy.setStyleSheet(
+            "QPushButton { background-color: #89b4fa; color: #1e1e2e; "
+            "padding: 6px 12px; border-radius: 4px; font-weight: bold; }"
+        )
+        win_copy.clicked.connect(
+            lambda: QApplication.clipboard().setText(rules.get("windows", ""))
+        )
+        layout.addWidget(win_copy)
+
+        close_btn = QPushButton("Close")
+        close_btn.setStyleSheet(
+            "QPushButton { background-color: #45475a; color: #cdd6f4; "
+            "padding: 6px 12px; border-radius: 4px; }"
+        )
+        close_btn.clicked.connect(self.close)
+        layout.addWidget(close_btn, alignment=Qt.AlignRight)
+
 
 class SecurityEventsView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
+
+        # Active Threat Dashboard
+        self._threat_dashboard = ThreatDashboard()
+        layout.addWidget(self._threat_dashboard)
 
         # Controls row
         controls = QHBoxLayout()
@@ -54,7 +194,7 @@ class SecurityEventsView(QWidget):
         cards.addStretch()
         layout.addLayout(cards)
 
-        # Events table
+        # Events table with context menu
         self._table = QTableWidget()
         columns = ["Time", "Severity", "Type", "Source IP", "Dest IP", "Description"]
         self._table.setColumnCount(len(columns))
@@ -63,6 +203,8 @@ class SecurityEventsView(QWidget):
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setAlternatingRowColors(True)
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self._table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._show_context_menu)
         self._table.setStyleSheet(
             """
             QTableWidget {
@@ -85,6 +227,10 @@ class SecurityEventsView(QWidget):
     def clear_button(self) -> QPushButton:
         return self._clear_btn
 
+    @property
+    def threat_dashboard(self) -> ThreatDashboard:
+        return self._threat_dashboard
+
     def update_events(self, events: list[dict]):
         """Replace all events from DB query."""
         self._all_events = list(events)
@@ -103,7 +249,47 @@ class SecurityEventsView(QWidget):
         self._card_warning.set_value("0")
         self._card_info.set_value("0")
 
-    def _apply_filter(self, severity_text: str):
+    def _show_context_menu(self, pos):
+        """Show context menu with firewall rule generation option."""
+        row = self._table.rowAt(pos.y())
+        if row < 0 or row >= len(self._all_events):
+            return
+
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background-color: #313244; color: #cdd6f4; "
+            "border: 1px solid #45475a; }"
+            "QMenu::item:selected { background-color: #45475a; }"
+        )
+
+        fw_action = QAction("Generate Firewall Rule", self)
+        fw_action.triggered.connect(lambda: self._generate_firewall_rule(row))
+        menu.addAction(fw_action)
+        menu.exec(self._table.viewport().mapToGlobal(pos))
+
+    def _generate_firewall_rule(self, row: int):
+        """Generate and display a firewall rule for the selected event."""
+        if row >= len(self._all_events):
+            return
+
+        # Get the currently displayed (filtered) event
+        filt = self._severity_filter.currentText().lower()
+        if filt == "all":
+            filtered = self._all_events
+        else:
+            filtered = [e for e in self._all_events if e.get("severity") == filt]
+
+        if row >= len(filtered):
+            return
+
+        event = filtered[row]
+
+        from src.core.firewall_rules import generate_rule
+        rules = generate_rule(event)
+        dialog = FirewallRuleDialog(rules, self)
+        dialog.exec()
+
+    def _apply_filter(self, severity_text: str = "All"):
         filt = severity_text.lower()
         if filt == "all":
             filtered = self._all_events
@@ -112,11 +298,9 @@ class SecurityEventsView(QWidget):
 
         self._table.setSortingEnabled(False)
         self._table.setRowCount(len(filtered))
-        counts = {"critical": 0, "warning": 0, "info": 0}
 
         for row, evt in enumerate(filtered):
             sev = evt.get("severity", "info")
-            counts[sev] = counts.get(sev, 0) + 1
             color = _SEVERITY_COLORS.get(sev)
 
             ts = evt.get("timestamp", "")

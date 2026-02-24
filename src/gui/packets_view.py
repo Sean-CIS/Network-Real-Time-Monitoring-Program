@@ -1,5 +1,5 @@
 from PySide6.QtCore import Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
@@ -20,11 +20,76 @@ _THREAT_COLORS = {
     "warning": QColor("#3d3820"),
 }
 
+# Colors for protocol pie chart
+_PIE_COLORS = [
+    QColor("#89b4fa"), QColor("#a6e3a1"), QColor("#f9e2af"),
+    QColor("#f38ba8"), QColor("#cba6f7"), QColor("#94e2d5"),
+    QColor("#fab387"), QColor("#74c7ec"), QColor("#f5c2e7"),
+    QColor("#b4befe"),
+]
+
+
+class ProtocolPieChart(QWidget):
+    """Simple pie chart showing protocol distribution."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumHeight(120)
+        self.setMaximumHeight(150)
+        self._data: dict[str, int] = {}
+
+    def set_data(self, data: dict[str, int]):
+        self._data = data
+        self.update()
+
+    def paintEvent(self, event):
+        if not self._data:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        total = sum(self._data.values())
+        if total == 0:
+            painter.end()
+            return
+
+        # Draw pie
+        h = self.height()
+        pie_size = min(h - 10, 130)
+        x = 10
+        y = (h - pie_size) // 2
+
+        start_angle = 0
+        sorted_items = sorted(self._data.items(), key=lambda x: x[1], reverse=True)
+        for i, (proto, count) in enumerate(sorted_items[:10]):
+            span_angle = int(count / total * 5760)  # Qt uses 1/16th degrees
+            color = _PIE_COLORS[i % len(_PIE_COLORS)]
+            painter.setBrush(color)
+            painter.setPen(QColor("#313244"))
+            painter.drawPie(x, y, pie_size, pie_size, start_angle, span_angle)
+            start_angle += span_angle
+
+        # Draw legend
+        legend_x = x + pie_size + 15
+        legend_y = 10
+        painter.setPen(QColor("#cdd6f4"))
+        for i, (proto, count) in enumerate(sorted_items[:8]):
+            color = _PIE_COLORS[i % len(_PIE_COLORS)]
+            pct = count / total * 100
+            painter.fillRect(legend_x, legend_y + i * 17, 12, 12, color)
+            painter.drawText(
+                legend_x + 16, legend_y + i * 17 + 11,
+                f"{proto}: {count} ({pct:.0f}%)"
+            )
+
+        painter.end()
+
 
 class PacketsView(QWidget):
     export_pcap_clicked = Signal()
     export_csv_clicked = Signal()
     generate_report_clicked = Signal()
+    load_pcap_clicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -84,9 +149,17 @@ class PacketsView(QWidget):
         self._report_btn.setEnabled(False)
         self._report_btn.clicked.connect(self.generate_report_clicked.emit)
 
+        self._load_pcap_btn = QPushButton("Load PCAP")
+        self._load_pcap_btn.setStyleSheet(
+            "QPushButton { background-color: #f9e2af; color: #1e1e2e; "
+            "padding: 6px 12px; border-radius: 4px; font-weight: bold; }"
+        )
+        self._load_pcap_btn.clicked.connect(self.load_pcap_clicked.emit)
+
         export_row.addWidget(self._export_pcap_btn)
         export_row.addWidget(self._export_csv_btn)
         export_row.addWidget(self._report_btn)
+        export_row.addWidget(self._load_pcap_btn)
         export_row.addStretch()
         layout.addLayout(export_row)
 
@@ -138,7 +211,21 @@ class PacketsView(QWidget):
         self._talkers_table.setVisible(False)  # collapsed by default
         layout.addWidget(self._talkers_table)
 
-        # Protocol distribution chart (compact height)
+        # Protocol distribution (collapsible)
+        self._proto_dist_header = QPushButton("\u25b6 Protocol Distribution")
+        self._proto_dist_header.setStyleSheet(
+            "QPushButton { color: #cdd6f4; font-size: 13px; font-weight: bold; "
+            "background: transparent; border: none; text-align: left; padding: 4px; }"
+            "QPushButton:hover { color: #89b4fa; }"
+        )
+        self._proto_dist_header.clicked.connect(self._toggle_proto_dist)
+        layout.addWidget(self._proto_dist_header)
+
+        self._proto_pie = ProtocolPieChart()
+        self._proto_pie.setVisible(False)
+        layout.addWidget(self._proto_pie)
+
+        # Protocol rate chart (compact height)
         self._proto_chart = LiveChart(
             title="Packets per Second by Protocol",
             y_label="Packets/s",
@@ -149,11 +236,11 @@ class PacketsView(QWidget):
         self._proto_chart.setMaximumHeight(180)
         layout.addWidget(self._proto_chart)
 
-        # Packet table with security columns
+        # Packet table with security + process columns
         self._table = QTableWidget()
         columns = [
             "Time", "Source", "Src Country", "Destination", "Dst Country",
-            "Protocol", "Length", "Info",
+            "Protocol", "Process", "Length", "Info",
         ]
         self._table.setColumnCount(len(columns))
         self._table.setHorizontalHeaderLabels(columns)
@@ -200,6 +287,13 @@ class PacketsView(QWidget):
             "\u25bc Top Talkers" if visible else "\u25b6 Top Talkers"
         )
 
+    def _toggle_proto_dist(self):
+        visible = not self._proto_pie.isVisible()
+        self._proto_pie.setVisible(visible)
+        self._proto_dist_header.setText(
+            "\u25bc Protocol Distribution" if visible else "\u25b6 Protocol Distribution"
+        )
+
     def update_top_talkers(self, talkers: list[dict]):
         """Update the top talkers table."""
         self._talkers_table.setRowCount(len(talkers))
@@ -221,6 +315,10 @@ class PacketsView(QWidget):
             else:
                 display = f"{total} B"
             self._talkers_table.setItem(row, 5, QTableWidgetItem(display))
+
+    def update_protocol_distribution(self, counts: dict[str, int]):
+        """Update the protocol distribution pie chart."""
+        self._proto_pie.set_data(counts)
 
     def set_capturing(self, capturing: bool):
         self._start_btn.setEnabled(not capturing)
@@ -264,6 +362,7 @@ class PacketsView(QWidget):
             pkt.get("dst", ""),
             pkt.get("country_dst", ""),
             proto,
+            pkt.get("process", ""),
             str(pkt.get("length", 0)),
             pkt.get("info", ""),
         ]
@@ -296,3 +395,4 @@ class PacketsView(QWidget):
         self._card_other.set_value("0")
         self._card_threats.set_value("0")
         self._proto_chart.clear_data()
+        self._proto_pie.set_data({})

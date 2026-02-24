@@ -24,6 +24,17 @@ _STATE_COLORS = {
     "NONE": QColor("#6c7086"),
 }
 _SUSPICIOUS_BG = QColor(243, 139, 168, 40)  # red tint
+_NEW_DEST_BG = QColor(137, 180, 250, 30)    # blue tint
+
+
+def _format_bytes(b: int) -> str:
+    if b >= 1_000_000:
+        return f"{b / 1_000_000:.1f} MB"
+    elif b >= 1_000:
+        return f"{b / 1_000:.1f} KB"
+    elif b > 0:
+        return f"{b} B"
+    return ""
 
 
 class ConnectionsView(QWidget):
@@ -58,9 +69,12 @@ class ConnectionsView(QWidget):
         cards.addStretch()
         layout.addLayout(cards)
 
-        # Connections table
+        # Connections table — with bandwidth columns
         self._table = QTableWidget()
-        columns = ["PID", "Process", "Local Address", "Remote Address", "State"]
+        columns = [
+            "PID", "Process", "Local Address", "Remote Address",
+            "State", "Bytes In", "Bytes Out",
+        ]
         self._table.setColumnCount(len(columns))
         self._table.setHorizontalHeaderLabels(columns)
         self._table.setSortingEnabled(True)
@@ -119,10 +133,16 @@ class ConnectionsView(QWidget):
             is_suspicious = c.get("highlight", False)
             if is_suspicious:
                 suspicious += 1
+            is_new = c.get("is_new_dest", False)
 
             # Determine colors for this row
             state_color = _STATE_COLORS.get(state)
-            bg_color = _SUSPICIOUS_BG if is_suspicious else None
+            if is_suspicious:
+                bg_color = _SUSPICIOUS_BG
+            elif is_new:
+                bg_color = _NEW_DEST_BG
+            else:
+                bg_color = None
 
             items_data = [
                 c.get("pid", ""),
@@ -130,11 +150,15 @@ class ConnectionsView(QWidget):
                 c.get("local_addr", ""),
                 c.get("remote_addr", ""),
                 state,
+                _format_bytes(c.get("bytes_in", 0)),
+                _format_bytes(c.get("bytes_out", 0)),
             ]
             for col, text in enumerate(items_data):
                 item = QTableWidgetItem(str(text))
                 if is_suspicious:
                     item.setForeground(QColor("#f38ba8"))  # red text
+                elif is_new:
+                    item.setForeground(QColor("#89b4fa"))  # blue text for new
                 elif state_color:
                     item.setForeground(state_color)
                 if bg_color:

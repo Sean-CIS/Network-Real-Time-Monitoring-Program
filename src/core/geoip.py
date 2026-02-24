@@ -42,6 +42,11 @@ class GeoIPLookup:
                 self._warned = True
                 print("[GeoIP] geoip2 package not installed. GeoIP features disabled.")
 
+    @property
+    def has_database(self) -> bool:
+        """Return True if the GeoLite2 database is loaded."""
+        return self._reader is not None
+
     @staticmethod
     def is_private(ip: str) -> bool:
         """Check if an IP address is private (RFC 1918, loopback, etc.)."""
@@ -51,6 +56,16 @@ class GeoIPLookup:
             return ipaddress.ip_address(ip).is_private
         except ValueError:
             return True
+
+    @staticmethod
+    def is_multicast(ip: str) -> bool:
+        """Check if an IP address is multicast (224.0.0.0/4, ff00::/8)."""
+        if not ip:
+            return False
+        try:
+            return ipaddress.ip_address(ip).is_multicast
+        except ValueError:
+            return False
 
     def lookup(self, ip: str) -> dict:
         """Look up GeoIP data for an IP address.

@@ -6,7 +6,9 @@ from PySide6.QtCore import QTimer, Slot
 from PySide6.QtWidgets import QApplication, QFileDialog
 
 from src.core.alerts import AlertEngine
+from src.core.arp_monitor import ARPMonitor
 from src.core.bandwidth import BandwidthMonitor
+from src.core.baseline import NetworkBaseline
 from src.core.connection_tracker import ConnectionTracker
 from src.core.discovery import DiscoveryWorker
 from src.core.latency import LatencyMonitor
@@ -55,6 +57,9 @@ class NetworkMonitorApp:
         self._init_connection_tracker()
         self._init_security_events()
         self._init_security_score_timer()
+        self._init_baseline()
+        self._init_arp_monitor()
+        self._init_dns_view()
 
     # ── Bandwidth ──────────────────────────────────────────────
 
@@ -75,6 +80,10 @@ class NetworkMonitorApp:
         total_down = sum(v.get("speed_down", 0) for v in data.values())
         total_up = sum(v.get("speed_up", 0) for v in data.values())
         self._window.dashboard_view.update_bandwidth_summary(total_down, total_up)
+
+        # Feed baseline
+        if hasattr(self, "_baseline"):
+            self._baseline.feed_bandwidth(total_down + total_up)
 
     # ── Latency ────────────────────────────────────────────────
 
@@ -139,6 +148,10 @@ class NetworkMonitorApp:
 
     @Slot(list)
     def _on_discovery_complete(self, devices: list):
+        # Force WAL checkpoint so main thread sees worker's writes
+        conn = db.get_connection()
+        conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+
         all_devices = db.get_all_devices()
 
         # Check for rogue devices and create security events
@@ -193,7 +206,7 @@ class NetworkMonitorApp:
             self._window.ports_view.scan_button.setEnabled(False)
             self._window.ports_view.quick_scan_button.setEnabled(False)
             self._capture_worker._threat_detector.set_scan_active(
-                True, self._network_info["local_ip"]
+                True, self._network_info["local_ip"], target
             )
             self._port_worker.set_target(target, ports)
             self._port_worker.start()
@@ -210,7 +223,7 @@ class NetworkMonitorApp:
         self._window.ports_view.scan_button.setEnabled(False)
         self._window.ports_view.quick_scan_button.setEnabled(False)
         self._capture_worker._threat_detector.set_scan_active(
-            True, self._network_info["local_ip"]
+            True, self._network_info["local_ip"], target
         )
         self._port_worker.set_target(target, ports)
         self._port_worker.start()
@@ -228,6 +241,9 @@ class NetworkMonitorApp:
         self._capture_worker = PacketCaptureWorker()
         self._capture_worker.packet_captured.connect(self._window.packets_view.add_packet)
         self._capture_worker.proto_stats.connect(self._window.packets_view.update_proto_chart)
+        self._capture_worker.protocol_dist.connect(
+            self._window.packets_view.update_protocol_distribution
+        )
         self._capture_worker.capture_status.connect(
             lambda s: self._window.packets_view.set_capturing(s == "Capturing...")
         )
@@ -235,13 +251,22 @@ class NetworkMonitorApp:
         # Security events from packet analysis
         self._capture_worker.security_event.connect(self._on_security_event)
 
+        # Warn if GeoIP database is missing
+        if not self._capture_worker._geoip.has_database:
+            self._window.statusBar().showMessage(
+                "GeoIP database not found \u2014 country lookups disabled. "
+                "Download GeoLite2-City.mmdb to data/",
+                15000,
+            )
+
         self._window.packets_view.start_button.clicked.connect(self._start_capture)
         self._window.packets_view.stop_button.clicked.connect(self._stop_capture)
 
-        # Export / report buttons
+        # Export / report / load buttons
         self._window.packets_view.export_pcap_clicked.connect(self._export_pcap)
         self._window.packets_view.export_csv_clicked.connect(self._export_csv)
         self._window.packets_view.generate_report_clicked.connect(self._generate_report)
+        self._window.packets_view.load_pcap_clicked.connect(self._load_pcap)
 
         # Top talkers timer (updates every 5 seconds during capture)
         self._top_talkers_timer = QTimer()
@@ -277,8 +302,47 @@ class NetworkMonitorApp:
                 else:
                     geo = geoip.lookup(ip)
                     cc = geo.get("country_code", "")
-                    t["country"] = cc if cc and cc != "?" else "Unknown"
+                    t["country"] = cc if cc and cc != "?" else "N/A"
             self._window.packets_view.update_top_talkers(talkers)
+
+    # ── PCAP Replay ───────────────────────────────────────────
+
+    def _load_pcap(self):
+        """Load a PCAP file and replay packets through the analysis engine."""
+        path, _ = QFileDialog.getOpenFileName(
+            self._window, "Open PCAP", "", "PCAP Files (*.pcap *.pcapng);;All Files (*)"
+        )
+        if not path:
+            return
+        try:
+            from scapy.all import rdpcap
+            packets = rdpcap(path)
+            self._window.packets_view.clear_packets()
+
+            for pkt in packets:
+                info = self._capture_worker.analyze_single_packet(pkt)
+                # Run threat detection
+                events = self._capture_worker._threat_detector.analyze_packet(info, pkt)
+                if events:
+                    severities = [e["severity"] for e in events]
+                    if "critical" in severities:
+                        info["threat_level"] = "critical"
+                    elif "warning" in severities:
+                        info["threat_level"] = "warning"
+                    else:
+                        info["threat_level"] = "info"
+                    for event in events:
+                        self._on_security_event(event)
+
+                self._window.packets_view.add_packet(info)
+
+            # Update protocol distribution
+            self._window.packets_view.update_protocol_distribution(
+                self._capture_worker.get_protocol_counts()
+            )
+
+        except Exception as e:
+            print(f"[Load PCAP Error] {e}")
 
     # ── Export / Report ────────────────────────────────────────
 
@@ -308,7 +372,7 @@ class NetworkMonitorApp:
                 return
             fieldnames = [
                 "time", "src", "dst", "protocol", "length", "info",
-                "threat_level", "country_src", "country_dst",
+                "threat_level", "country_src", "country_dst", "process",
             ]
             with open(path, "w", newline="") as f:
                 writer = csv.DictWriter(
@@ -386,8 +450,79 @@ class NetworkMonitorApp:
         self._conn_tracker.data_ready.connect(
             self._window.connections_view.update_connections
         )
+        self._conn_tracker.data_ready.connect(self._on_connections_data)
+        self._conn_tracker.new_destination.connect(self._on_new_destination)
         self._conn_tracker.error_occurred.connect(self._on_error)
         self._conn_tracker.start()
+
+    @Slot(list)
+    def _on_connections_data(self, conns: list):
+        """Feed connection count to baseline."""
+        if hasattr(self, "_baseline"):
+            self._baseline.feed_connection_count(len(conns))
+
+    @Slot(dict)
+    def _on_new_destination(self, dest: dict):
+        """Log first-time outbound destinations as info events."""
+        db.insert_security_event(
+            severity="info",
+            event_type="new_destination",
+            source_ip="",
+            dest_ip=dest.get("remote_ip", ""),
+            description=(
+                f"New outbound destination: {dest.get('remote_ip', '?')}"
+                f":{dest.get('remote_port', '?')} "
+                f"(process: {dest.get('process', 'Unknown')})"
+            ),
+        )
+
+    # ── Network Baseline ──────────────────────────────────────
+
+    def _init_baseline(self):
+        self._baseline = NetworkBaseline(interval_s=10.0)
+        self._baseline.deviation_detected.connect(self._on_security_event)
+        self._baseline.mode_changed.connect(
+            self._window.dashboard_view.update_baseline_mode
+        )
+        self._baseline.start()
+
+        # Set initial mode indicator
+        mode = "learning" if self._baseline.is_learning else "monitoring"
+        self._window.dashboard_view.update_baseline_mode(mode)
+
+    # ── ARP Monitor ───────────────────────────────────────────
+
+    def _init_arp_monitor(self):
+        self._arp_monitor = ARPMonitor(interval_s=10.0)
+        self._arp_monitor.arp_table_updated.connect(
+            self._window.devices_view.update_arp_table
+        )
+        self._arp_monitor.arp_change.connect(self._on_arp_change)
+        self._arp_monitor.start()
+
+    @Slot(dict)
+    def _on_arp_change(self, change: dict):
+        """Handle ARP MAC change — create security event and update UI."""
+        self._window.devices_view.on_arp_change(change)
+        event = {
+            "timestamp": change.get("timestamp", ""),
+            "severity": "warning",
+            "event_type": "arp_mac_change",
+            "source_ip": change.get("ip", ""),
+            "dest_ip": "",
+            "description": (
+                f"ARP MAC change for {change.get('ip', '?')}: "
+                f"{change.get('old_mac', '?')} -> {change.get('new_mac', '?')}"
+            ),
+            "raw_details": json.dumps(change),
+        }
+        self._on_security_event(event)
+
+    # ── DNS View ──────────────────────────────────────────────
+
+    def _init_dns_view(self):
+        """Load initial DNS history data."""
+        self._window.dns_view.refresh()
 
     # ── Security Score ─────────────────────────────────────────
 
@@ -426,6 +561,12 @@ class NetworkMonitorApp:
         # Update 24h timeline
         self._update_security_timeline()
 
+        # Update traffic heatmap
+        self._update_traffic_heatmap()
+
+        # Update threat dashboard
+        self._update_threat_dashboard()
+
     def _update_security_timeline(self):
         """Fetch hourly event counts for the last 24 hours and update dashboard."""
         from datetime import datetime, timedelta
@@ -456,6 +597,52 @@ class NetworkMonitorApp:
             hourly_data.append(bucket)
 
         self._window.dashboard_view.update_security_timeline(hourly_data)
+
+    def _update_traffic_heatmap(self):
+        """Update the dashboard traffic heatmap from bandwidth history."""
+        try:
+            heatmap_data = db.get_bandwidth_heatmap_data()
+            self._window.dashboard_view.update_traffic_heatmap(heatmap_data)
+        except Exception:
+            pass
+
+    def _update_threat_dashboard(self):
+        """Update the active threat dashboard in Security Events tab."""
+        try:
+            counts = db.get_security_event_counts_24h()
+            critical_24h = counts.get("critical", 0)
+            warning_24h = counts.get("warning", 0)
+            total_24h = critical_24h + warning_24h + counts.get("info", 0)
+
+            # Determine threat level
+            if critical_24h > 0:
+                level = "critical"
+            elif warning_24h > 3:
+                level = "elevated"
+            else:
+                level = "safe"
+
+            # Count unique external IPs from current capture
+            external_ips = 0
+            if hasattr(self._capture_worker, "get_captured_packets"):
+                geoip = self._capture_worker.get_geoip()
+                seen = set()
+                for p in self._capture_worker.get_captured_packets()[-500:]:
+                    for key in ("src", "dst"):
+                        ip = p.get(key, "")
+                        if ip and not geoip.is_private(ip) and ip not in seen:
+                            seen.add(ip)
+                            external_ips += 1
+
+            dashboard = self._window.security_events_view.threat_dashboard
+            dashboard.update_threat_level(level)
+            dashboard.update_stats(
+                external_ips=external_ips,
+                unresolved=critical_24h + warning_24h,
+                events_24h=total_24h,
+            )
+        except Exception:
+            pass
 
     # ── Alerts ─────────────────────────────────────────────────
 
@@ -511,6 +698,10 @@ class NetworkMonitorApp:
             self._capture_worker.stop()
         if hasattr(self, "_conn_tracker"):
             self._conn_tracker.stop()
+        if hasattr(self, "_baseline"):
+            self._baseline.stop()
+        if hasattr(self, "_arp_monitor"):
+            self._arp_monitor.stop()
         if hasattr(self, "_top_talkers_timer"):
             self._top_talkers_timer.stop()
         if hasattr(self, "_security_score_timer"):

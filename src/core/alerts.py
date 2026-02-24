@@ -24,7 +24,7 @@ class AlertEngine(QObject):
 
         # Bandwidth anomaly detection
         self._bandwidth_history: list[float] = []
-        self._bw_window_size = 60
+        self._bw_window_size = 300
 
     def configure(self, bandwidth_mbps: float = 100.0, latency_ms: float = 200.0,
                   offline_timeout_s: float = 60.0, cooldown_s: float = 300.0):
@@ -79,11 +79,11 @@ class AlertEngine(QObject):
             self._bandwidth_history.pop(0)
 
         anomaly_key = "bandwidth_anomaly:global"
-        if len(self._bandwidth_history) >= 60:
+        if len(self._bandwidth_history) >= 120:
             baseline = self._bandwidth_history[:-1]
             mean = statistics.mean(baseline)
             stdev = statistics.stdev(baseline) if len(baseline) > 1 else 0
-            if stdev > 1000 and mean > 10000 and total_bps > mean + 3 * stdev:
+            if stdev > 10_000 and mean > 100_000 and total_bps > mean + 3 * stdev:
                 self._emit_alert(
                     alert_type="bandwidth_anomaly",
                     severity="warning",

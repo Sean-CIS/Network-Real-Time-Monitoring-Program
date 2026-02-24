@@ -39,11 +39,72 @@ _SYN_FLOOD_WINDOW_S = 10.0
 _DNS_FREQ_THRESHOLD = 20        # queries to same domain in window
 _DNS_FREQ_WINDOW_S = 60.0
 _DNS_SIZE_THRESHOLD = 512       # bytes — suspiciously large DNS packet
-_DGA_ENTROPY_THRESHOLD = 3.5
-_DGA_LENGTH_THRESHOLD = 12
+_DGA_ENTROPY_THRESHOLD = 4.0
+_DGA_LENGTH_THRESHOLD = 20
 _NXDOMAIN_THRESHOLD = 10        # NXDOMAIN responses in window
 _NXDOMAIN_WINDOW_S = 60.0
 _MAX_RAW_PACKETS = 100_000
+
+# Known DNS resolvers — never flag queries to these as DGA
+_KNOWN_DNS_RESOLVERS = {
+    "208.67.222.222", "208.67.220.220",  # OpenDNS
+    "8.8.8.8", "8.8.4.4",              # Google DNS
+    "1.1.1.1", "1.0.0.1",              # Cloudflare
+    "9.9.9.9",                          # Quad9
+}
+
+# Common TLDs — domains with these TLDs AND english words are likely legit
+_WHITELISTED_TLDS = {
+    "com", "net", "org", "edu", "gov", "io", "co", "dev", "app",
+    "cloud", "me", "info", "tv", "us", "uk", "de", "fr", "jp",
+}
+
+# Common English substrings found in legitimate domain labels
+_ENGLISH_FRAGMENTS = {
+    "cloud", "cdn", "api", "web", "app", "mail", "dev", "data",
+    "host", "net", "hub", "lab", "dns", "auth", "log", "git",
+    "img", "stat", "code", "docs", "font", "play", "shop", "news",
+    "file", "link", "page", "site", "blog", "chat", "live", "user",
+    "fast", "edge", "push", "sync", "pool", "node", "core", "test",
+    "beta", "prod", "stage", "cache", "proxy", "media", "video",
+    "audio", "stream", "track", "click", "event", "pixel", "serve",
+    "static", "assets", "content", "service", "update", "download",
+    "upload", "storage", "server", "client", "mobile", "desktop",
+    "android", "apple", "google", "amazon", "azure", "office",
+    "micro", "mozilla", "firefox", "chrome", "safari", "windows",
+}
+
+
+def _has_english_words(label: str) -> bool:
+    """Check if a domain label contains common English substrings."""
+    lower = label.lower()
+    return any(frag in lower for frag in _ENGLISH_FRAGMENTS)
+
+
+def _get_second_level_label(qname: str) -> str:
+    """Extract the second-level label from a FQDN (e.g. 'x8k3m2' from 'x8k3m2.example.com')."""
+    parts = qname.rstrip(".").split(".")
+    if len(parts) >= 2:
+        return parts[-2]
+    return parts[0] if parts else ""
+
+
+def _non_alpha_ratio(label: str) -> float:
+    """Return the ratio of non-alpha characters in a string."""
+    if not label:
+        return 0.0
+    non_alpha = sum(1 for c in label if not c.isalpha())
+    return non_alpha / len(label)
+
+
+def _consonant_vowel_ratio(label: str) -> float:
+    """Return consonant-to-vowel ratio. High values suggest random strings."""
+    vowels = set("aeiou")
+    v_count = sum(1 for c in label.lower() if c in vowels)
+    c_count = sum(1 for c in label.lower() if c.isalpha() and c not in vowels)
+    if v_count == 0:
+        return float(c_count) if c_count > 0 else 0.0
+    return c_count / v_count
 
 
 class ThreatDetector:
@@ -91,14 +152,20 @@ class ThreatDetector:
         # Security events from current session
         self._security_events: list[dict] = []
 
-        # Self-scan suppression: skip port_scan/syn_flood from local IP during user scans
+        # Self-scan suppression: skip port_scan/syn_flood during user scans
         self._scan_active: bool = False
         self._scan_source_ip: str = ""
+        self._scan_target_ip: str = ""
 
-    def set_scan_active(self, active: bool, source_ip: str = ""):
-        """Suppress port_scan/syn_flood alerts from source_ip while a user scan is running."""
+    def set_scan_active(self, active: bool, source_ip: str = "",
+                        target_ip: str = ""):
+        """Suppress port_scan/syn_flood alerts during a user-initiated scan.
+
+        Checks both directions: local->target AND target->local (SYN-ACK replies).
+        """
         self._scan_active = active
         self._scan_source_ip = source_ip
+        self._scan_target_ip = target_ip
 
     def analyze_packet(self, pkt_dict: dict, raw_pkt=None) -> list[dict]:
         """Analyze a packet and return any security events detected.
@@ -129,9 +196,12 @@ class ThreatDetector:
             self._traffic_stats[dst]["bytes_recv"] += length
             self._traffic_stats[dst]["packets_recv"] += 1
 
-        # Suppress port_scan/syn_flood from local IP during user-initiated scans
+        # Suppress port_scan/syn_flood during user-initiated scans (both directions)
         _skip_scan_checks = (self._scan_active
-                             and src == self._scan_source_ip)
+                             and (src == self._scan_source_ip
+                                  or dst == self._scan_source_ip
+                                  or src == self._scan_target_ip
+                                  or dst == self._scan_target_ip))
 
         # Port scan detection (TCP SYN to multiple ports)
         if protocol == "TCP" and dst_port and src and "S" in flags:
@@ -301,24 +371,50 @@ class ThreatDetector:
                     "raw_details": json.dumps({"domain": base_domain, "count": len(tracker)}),
                 })
 
-        # DGA detection: high entropy domain names
-        if (not _is_reverse_dns
-                and len(qname) > _DGA_LENGTH_THRESHOLD
-                and _shannon_entropy(qname) > _DGA_ENTROPY_THRESHOLD
-                and qname not in self._dga_alerted):
-            self._dga_alerted.add(qname)
-            events.append({
-                "timestamp": datetime.now().isoformat(),
-                "severity": "warning",
-                "event_type": "dga_suspect",
-                "source_ip": src,
-                "dest_ip": dst,
-                "description": (
-                    f"Possible DGA domain: {qname} "
-                    f"(entropy: {_shannon_entropy(qname):.2f})"
-                ),
-                "raw_details": json.dumps({"domain": qname}),
-            })
+        # DGA detection: multi-criteria check on second-level domain label
+        if not _is_reverse_dns and qname not in self._dga_alerted:
+            # Skip if querying a known DNS resolver
+            if dst not in _KNOWN_DNS_RESOLVERS:
+                sld = _get_second_level_label(qname)
+                parts = qname.rstrip(".").split(".")
+                tld = parts[-1].lower() if parts else ""
+
+                # Only evaluate if the second-level label is long enough
+                if len(sld) > _DGA_LENGTH_THRESHOLD:
+                    sld_entropy = _shannon_entropy(sld)
+                    na_ratio = _non_alpha_ratio(sld)
+                    cv_ratio = _consonant_vowel_ratio(sld)
+
+                    # Skip if TLD is whitelisted AND label has english words
+                    is_legit = (tld in _WHITELISTED_TLDS
+                                and _has_english_words(sld))
+
+                    # Flag only if: high entropy AND high non-alpha ratio
+                    # OR extremely high consonant-to-vowel ratio
+                    if (not is_legit
+                            and sld_entropy > _DGA_ENTROPY_THRESHOLD
+                            and (na_ratio >= 0.3 or cv_ratio > 5.0)):
+                        self._dga_alerted.add(qname)
+                        events.append({
+                            "timestamp": datetime.now().isoformat(),
+                            "severity": "warning",
+                            "event_type": "dga_suspect",
+                            "source_ip": src,
+                            "dest_ip": dst,
+                            "description": (
+                                f"Possible DGA domain: {qname} "
+                                f"(label entropy: {sld_entropy:.2f}, "
+                                f"non-alpha: {na_ratio:.0%}, "
+                                f"C/V ratio: {cv_ratio:.1f})"
+                            ),
+                            "raw_details": json.dumps({
+                                "domain": qname,
+                                "label": sld,
+                                "entropy": round(sld_entropy, 2),
+                                "non_alpha_ratio": round(na_ratio, 2),
+                                "cv_ratio": round(cv_ratio, 1),
+                            }),
+                        })
 
         # NXDOMAIN abuse detection
         rcode = dns.rcode if hasattr(dns, "rcode") else 0

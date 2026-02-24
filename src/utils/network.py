@@ -5,6 +5,7 @@ import os
 import platform
 import re
 import socket
+import struct
 import subprocess
 
 
@@ -54,7 +55,10 @@ def _gateway_from_proc_route() -> str:
                 parts = line.strip().split()
                 if len(parts) >= 3 and parts[1] == "00000000":
                     gw_hex = parts[2]
-                    gw_bytes = bytes.fromhex(gw_hex)
+                    # /proc/net/route stores __be32 values printed via %08X on
+                    # the native (little-endian) int — pack back to network order
+                    gw_int = int(gw_hex, 16)
+                    gw_bytes = struct.pack("<I", gw_int)
                     return socket.inet_ntoa(gw_bytes)
     except (OSError, ValueError, IndexError):
         pass

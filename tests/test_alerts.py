@@ -89,6 +89,83 @@ class TestAlertEngine(unittest.TestCase):
         self.assertEqual(len(triggered), 0)
 
 
+class TestAlertDeduplication(unittest.TestCase):
+    """Tests for the active_conditions-based deduplication logic."""
+
+    @patch("src.core.alerts.db")
+    def test_persistent_condition_single_alert(self, mock_db):
+        """A host that stays unreachable should generate exactly ONE alert."""
+        from src.core.alerts import AlertEngine
+
+        engine = AlertEngine()
+        triggered = []
+        engine.alert_triggered.connect(lambda a: triggered.append(a))
+
+        results = [{"host": "10.0.0.1", "label": "Server", "latency_ms": None, "is_alive": False}]
+
+        engine.check_latency(results)  # First: should fire
+        engine.check_latency(results)  # Second: suppressed (active condition)
+        engine.check_latency(results)  # Third: still suppressed
+
+        self.assertEqual(len(triggered), 1)
+
+    @patch("src.core.alerts.db")
+    def test_condition_resolved_then_re_alert(self, mock_db):
+        """When host recovers and fails again, a new alert fires."""
+        from src.core.alerts import AlertEngine
+
+        engine = AlertEngine()
+        engine.configure(cooldown_s=0)  # Disable cooldown for test
+        triggered = []
+        engine.alert_triggered.connect(lambda a: triggered.append(a))
+
+        down = [{"host": "10.0.0.1", "label": "Server", "latency_ms": None, "is_alive": False}]
+        up = [{"host": "10.0.0.1", "label": "Server", "latency_ms": 5.0, "is_alive": True}]
+
+        engine.check_latency(down)  # Alert 1: unreachable
+        engine.check_latency(up)    # Clears condition (no alert, just clears)
+        engine.check_latency(down)  # Alert 2: unreachable again
+
+        self.assertEqual(len(triggered), 2)
+
+    @patch("src.core.alerts.db")
+    def test_reset_clears_active_conditions(self, mock_db):
+        """reset() should allow the same condition to re-fire."""
+        from src.core.alerts import AlertEngine
+
+        engine = AlertEngine()
+        engine.configure(cooldown_s=0)
+        triggered = []
+        engine.alert_triggered.connect(lambda a: triggered.append(a))
+
+        results = [{"host": "10.0.0.1", "label": "Server", "latency_ms": None, "is_alive": False}]
+        engine.check_latency(results)  # Alert 1
+        engine.reset()
+        engine.check_latency(results)  # Alert 2 (reset cleared condition)
+
+        self.assertEqual(len(triggered), 2)
+
+    @patch("src.core.alerts.db")
+    def test_bandwidth_dedup(self, mock_db):
+        """Bandwidth alerts should also be deduplicated."""
+        from src.core.alerts import AlertEngine
+
+        engine = AlertEngine()
+        engine.configure(bandwidth_mbps=10.0, cooldown_s=0)
+        triggered = []
+        engine.alert_triggered.connect(lambda a: triggered.append(a))
+
+        high_data = {"eth0": {"speed_down": 20_000_000, "speed_up": 1000}}
+        low_data = {"eth0": {"speed_down": 1000, "speed_up": 1000}}
+
+        engine.check_bandwidth(high_data)   # Alert 1
+        engine.check_bandwidth(high_data)   # Suppressed (same condition)
+        engine.check_bandwidth(low_data)    # Clears condition
+        engine.check_bandwidth(high_data)   # Alert 2
+
+        self.assertEqual(len(triggered), 2)
+
+
 class TestConfigLoader(unittest.TestCase):
     def test_load_default_config(self):
         from src.utils.config import load_config

@@ -28,6 +28,10 @@ def _format_bytes(total_bytes: int) -> str:
     return f"{total_bytes} B"
 
 
+# Threshold (in bytes/s) above which the chart switches from KB/s to MB/s
+_MB_THRESHOLD = 1_000_000  # 1 MB/s
+
+
 class BandwidthView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -68,6 +72,7 @@ class BandwidthView(QWidget):
 
         self._current_interface: str = ""
         self._all_data: dict[str, dict] = {}
+        self._use_mb = False
 
     def set_interfaces(self, interfaces: list[str]):
         current = self._interface_combo.currentText()
@@ -99,9 +104,26 @@ class BandwidthView(QWidget):
             self._card_total_down.set_value(_format_bytes(d.get("bytes_recv", 0)))
             self._card_total_up.set_value(_format_bytes(d.get("bytes_sent", 0)))
 
-            # Chart in KB/s
-            self._speed_chart.add_data_point([speed_down / 1000, speed_up / 1000])
+            # Auto-scale: switch between KB/s and MB/s
+            peak = max(speed_down, speed_up)
+            if peak >= _MB_THRESHOLD and not self._use_mb:
+                self._use_mb = True
+                self._speed_chart.set_y_label("Speed (MB/s)")
+            elif peak < _MB_THRESHOLD and self._use_mb:
+                self._use_mb = False
+                self._speed_chart.set_y_label("Speed (KB/s)")
+
+            if self._use_mb:
+                self._speed_chart.add_data_point(
+                    [speed_down / 1_000_000, speed_up / 1_000_000]
+                )
+            else:
+                self._speed_chart.add_data_point(
+                    [speed_down / 1_000, speed_up / 1_000]
+                )
 
     def _on_interface_changed(self, interface: str):
         self._current_interface = interface
+        self._use_mb = False
+        self._speed_chart.set_y_label("Speed (KB/s)")
         self._speed_chart.clear_data()

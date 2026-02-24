@@ -9,6 +9,10 @@ from src.gui.widgets.live_chart import LiveChart
 from src.gui.widgets.stat_card import StatCard
 
 
+# Threshold (in bytes/s) above which the dashboard chart switches to MB/s
+_MB_THRESHOLD = 1_000_000
+
+
 class DashboardView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -19,19 +23,23 @@ class DashboardView(QWidget):
         title.setStyleSheet("color: #cdd6f4; font-size: 18px; font-weight: bold; padding: 8px;")
         layout.addWidget(title)
 
-        # Top stat cards row
-        cards_layout = QHBoxLayout()
+        # Network info row
+        net_cards_layout = QHBoxLayout()
+        self._card_local_ip = StatCard("Local IP", "—")
+        self._card_subnet = StatCard("Subnet", "—")
         self._card_download = StatCard("Download", "—")
         self._card_upload = StatCard("Upload", "—")
         self._card_latency = StatCard("Avg Latency", "—")
         self._card_devices = StatCard("Devices Online", "0")
         self._card_alerts = StatCard("Active Alerts", "0")
-        cards_layout.addWidget(self._card_download)
-        cards_layout.addWidget(self._card_upload)
-        cards_layout.addWidget(self._card_latency)
-        cards_layout.addWidget(self._card_devices)
-        cards_layout.addWidget(self._card_alerts)
-        layout.addLayout(cards_layout)
+        net_cards_layout.addWidget(self._card_local_ip)
+        net_cards_layout.addWidget(self._card_subnet)
+        net_cards_layout.addWidget(self._card_download)
+        net_cards_layout.addWidget(self._card_upload)
+        net_cards_layout.addWidget(self._card_latency)
+        net_cards_layout.addWidget(self._card_devices)
+        net_cards_layout.addWidget(self._card_alerts)
+        layout.addLayout(net_cards_layout)
 
         # Charts row
         charts_layout = QHBoxLayout()
@@ -53,6 +61,13 @@ class DashboardView(QWidget):
         charts_layout.addWidget(self._latency_chart)
         layout.addLayout(charts_layout, stretch=1)
 
+        self._use_mb = False
+
+    def update_network_info(self, local_ip: str, subnet: str):
+        """Set the detected network info cards."""
+        self._card_local_ip.set_value(local_ip)
+        self._card_subnet.set_value(subnet)
+
     def update_bandwidth_summary(self, speed_down: float, speed_up: float):
         if speed_down >= 1_000_000:
             self._card_download.set_value(f"{speed_down / 1_000_000:.2f} MB/s")
@@ -68,7 +83,23 @@ class DashboardView(QWidget):
         else:
             self._card_upload.set_value(f"{speed_up:.0f} B/s")
 
-        self._bandwidth_chart.add_data_point([speed_down / 1000, speed_up / 1000])
+        # Auto-scale chart between KB/s and MB/s
+        peak = max(speed_down, speed_up)
+        if peak >= _MB_THRESHOLD and not self._use_mb:
+            self._use_mb = True
+            self._bandwidth_chart.set_y_label("MB/s")
+        elif peak < _MB_THRESHOLD and self._use_mb:
+            self._use_mb = False
+            self._bandwidth_chart.set_y_label("KB/s")
+
+        if self._use_mb:
+            self._bandwidth_chart.add_data_point(
+                [speed_down / 1_000_000, speed_up / 1_000_000]
+            )
+        else:
+            self._bandwidth_chart.add_data_point(
+                [speed_down / 1_000, speed_up / 1_000]
+            )
 
     def update_latency_summary(self, avg_ms: float):
         self._card_latency.set_value(f"{avg_ms:.1f} ms")

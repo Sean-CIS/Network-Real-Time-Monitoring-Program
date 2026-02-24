@@ -18,6 +18,7 @@ class AlertEngine(QObject):
         self._device_offline_timeout_s = 60.0
         self._cooldown_period_s = 300.0
         self._cooldowns: dict[str, float] = {}
+        self._active_conditions: set[str] = set()
         self._known_devices: set[str] = set()
 
     def configure(self, bandwidth_mbps: float = 100.0, latency_ms: float = 200.0,
@@ -27,12 +28,18 @@ class AlertEngine(QObject):
         self._device_offline_timeout_s = offline_timeout_s
         self._cooldown_period_s = cooldown_s
 
+    def reset(self):
+        """Clear all cooldowns and active conditions (e.g. after clearing alerts)."""
+        self._cooldowns.clear()
+        self._active_conditions.clear()
+
     def check_bandwidth(self, data: dict):
         """Check bandwidth data for threshold violations."""
         for iface, stats in data.items():
             speed_down_mbps = stats.get("speed_down", 0) / 1_000_000 * 8
             speed_up_mbps = stats.get("speed_up", 0) / 1_000_000 * 8
 
+            down_key = f"bandwidth_high:{iface}:down"
             if speed_down_mbps > self._bandwidth_threshold_mbps:
                 self._emit_alert(
                     alert_type="bandwidth_high",
@@ -40,8 +47,12 @@ class AlertEngine(QObject):
                     message=f"Download speed {speed_down_mbps:.1f} Mbps exceeds threshold "
                             f"({self._bandwidth_threshold_mbps} Mbps) on {iface}",
                     source=iface,
+                    condition_key=down_key,
                 )
+            else:
+                self._active_conditions.discard(down_key)
 
+            up_key = f"bandwidth_high:{iface}:up"
             if speed_up_mbps > self._bandwidth_threshold_mbps:
                 self._emit_alert(
                     alert_type="bandwidth_high",
@@ -49,7 +60,10 @@ class AlertEngine(QObject):
                     message=f"Upload speed {speed_up_mbps:.1f} Mbps exceeds threshold "
                             f"({self._bandwidth_threshold_mbps} Mbps) on {iface}",
                     source=iface,
+                    condition_key=up_key,
                 )
+            else:
+                self._active_conditions.discard(up_key)
 
     def check_latency(self, results: list[dict]):
         """Check latency results for threshold violations."""
@@ -58,21 +72,34 @@ class AlertEngine(QObject):
             host = r.get("host", "")
             label = r.get("label", host)
 
+            unreachable_key = f"latency_high:{host}:unreachable"
+            high_key = f"latency_high:{host}:high"
+
             if not r.get("is_alive"):
+                # Host is down — clear the "high latency" condition if it was set
+                self._active_conditions.discard(high_key)
                 self._emit_alert(
                     alert_type="latency_high",
                     severity="critical",
                     message=f"Host {label} ({host}) is unreachable",
                     source=host,
+                    condition_key=unreachable_key,
                 )
             elif latency and latency > self._latency_threshold_ms:
+                # Host is alive but latency is high — clear unreachable condition
+                self._active_conditions.discard(unreachable_key)
                 self._emit_alert(
                     alert_type="latency_high",
                     severity="warning",
                     message=f"Latency to {label} ({host}) is {latency:.0f}ms "
                             f"(threshold: {self._latency_threshold_ms}ms)",
                     source=host,
+                    condition_key=high_key,
                 )
+            else:
+                # Host is alive and latency is fine — clear both conditions
+                self._active_conditions.discard(unreachable_key)
+                self._active_conditions.discard(high_key)
 
     def check_devices(self, devices: list[dict]):
         """Check for new devices on the network."""
@@ -91,11 +118,21 @@ class AlertEngine(QObject):
 
         self._known_devices = current_ips
 
-    def _emit_alert(self, alert_type: str, severity: str, message: str, source: str = ""):
-        key = f"{alert_type}:{source}"
+    def _emit_alert(self, alert_type: str, severity: str, message: str,
+                    source: str = "", condition_key: str = ""):
+        key = condition_key or f"{alert_type}:{source}"
+
+        # If this condition is already active, suppress completely
+        if key in self._active_conditions:
+            return
+
+        # Cooldown check for flapping protection (rapid on/off/on)
         now = time.time()
         if now - self._cooldowns.get(key, 0) < self._cooldown_period_s:
             return
+
+        # Mark condition as active and record cooldown timestamp
+        self._active_conditions.add(key)
         self._cooldowns[key] = now
 
         alert = {

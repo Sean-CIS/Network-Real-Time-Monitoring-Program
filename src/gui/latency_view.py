@@ -1,4 +1,6 @@
-from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
+import math
+
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from src.gui.widgets.live_chart import LiveChart
 from src.gui.widgets.stat_card import StatCard
@@ -31,6 +33,11 @@ class LatencyView(QWidget):
         )
         layout.addWidget(self._chart, stretch=1)
 
+        # Status label for unreachable hosts
+        self._status_label = QLabel("")
+        self._status_label.setStyleSheet("color: #f38ba8; font-size: 12px; padding: 4px;")
+        layout.addWidget(self._status_label)
+
         self._history: dict[str, list[float]] = {}
         self._target_labels: list[str] = []
 
@@ -47,27 +54,33 @@ class LatencyView(QWidget):
             line_labels=labels,
             max_points=300,
         )
-        layout.addWidget(self._chart, stretch=1)
+        # Insert chart before the status label
+        layout.insertWidget(layout.count() - 1, self._chart, stretch=1)
         self._history = {label: [] for label in labels}
 
     def update_latency(self, results: list[dict]):
         """Called with [{label, host, latency_ms, is_alive}, ...]"""
         values = []
         all_latencies = []
+        down_hosts = []
 
         for r in results:
             label = r.get("label", r.get("host", ""))
-            latency = r.get("latency_ms", 0) or 0
-            values.append(latency)
+
+            if r.get("is_alive"):
+                latency = r.get("latency_ms") or 0.0
+                values.append(latency)
+                all_latencies.append(latency)
+            else:
+                # Use NaN so PyQtGraph shows a gap instead of a misleading 0ms line
+                values.append(float("nan"))
+                down_hosts.append(label)
 
             if label not in self._history:
                 self._history[label] = []
-            self._history[label].append(latency)
+            self._history[label].append(values[-1])
             if len(self._history[label]) > 300:
                 self._history[label] = self._history[label][-300:]
-
-            if r.get("is_alive"):
-                all_latencies.append(latency)
 
         if values:
             self._chart.add_data_point(values)
@@ -83,3 +96,11 @@ class LatencyView(QWidget):
         if total > 0:
             loss = ((total - alive) / total) * 100
             self._card_loss.set_value(f"{loss:.0f}%")
+
+        # Show which hosts are down
+        if down_hosts:
+            self._status_label.setText(
+                "Unreachable: " + ", ".join(down_hosts)
+            )
+        else:
+            self._status_label.setText("")

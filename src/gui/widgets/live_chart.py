@@ -37,7 +37,8 @@ class LiveChart(QWidget):
         for i in range(num_lines):
             color = colors[i % len(colors)]
             pen = pg.mkPen(color=color, width=2)
-            line = self._plot_widget.plot([], [], pen=pen, name=labels[i])
+            line = self._plot_widget.plot([], [], pen=pen, name=labels[i],
+                                          connect="finite")
             self._lines.append(line)
             self._data.append(np.array([]))
 
@@ -65,6 +66,10 @@ class LiveChart(QWidget):
         for i in range(self._num_lines):
             if i < len(values):
                 self._lines[i].setData(self._x_data, self._data[i])
+
+    def set_y_label(self, label: str):
+        """Update the Y-axis label dynamically."""
+        self._plot_widget.setLabel("left", label, color="#cdd6f4")
 
     def clear_data(self):
         self._x_data = np.array([])

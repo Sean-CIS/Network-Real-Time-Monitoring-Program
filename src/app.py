@@ -12,6 +12,7 @@ from src.core.port_scanner import PortScanWorker
 from src.gui.main_window import MainWindow
 from src.utils import db
 from src.utils.config import get, load_config
+from src.utils.network import detect_network_info
 
 
 class NetworkMonitorApp:
@@ -24,8 +25,21 @@ class NetworkMonitorApp:
         load_config()
         db.init_db()
 
+        # Auto-detect network info (gateway, local IP, subnet)
+        self._network_info = detect_network_info()
+
         self._window = MainWindow()
         self._alert_engine = AlertEngine()
+
+        # Push detected network info to UI
+        self._window.dashboard_view.update_network_info(
+            self._network_info["local_ip"],
+            self._network_info["subnet_cidr"],
+        )
+        self._window.set_network_status(
+            self._network_info["gateway_ip"],
+            self._network_info["subnet_cidr"],
+        )
 
         self._init_bandwidth()
         self._init_latency()
@@ -59,6 +73,13 @@ class NetworkMonitorApp:
     def _init_latency(self):
         interval = get("latency", "poll_interval_s", 2)
         targets = get("latency", "targets", [])
+
+        # Replace the Default Gateway target host with the auto-detected gateway
+        detected_gw = self._network_info["gateway_ip"]
+        for t in targets:
+            if t.get("label", "").lower() == "default gateway":
+                t["host"] = detected_gw
+
         self._latency_monitor = LatencyMonitor(targets=targets, interval_s=interval)
         self._latency_monitor.data_ready.connect(self._on_latency_data)
         self._latency_monitor.error_occurred.connect(self._on_error)
@@ -84,8 +105,15 @@ class NetworkMonitorApp:
     # ── Discovery ──────────────────────────────────────────────
 
     def _init_discovery(self):
-        network = get("discovery", "network", "192.168.1.0/24")
-        self._discovery_worker = DiscoveryWorker(network=network)
+        # Use auto-detected subnet instead of config default
+        network = self._network_info["subnet_cidr"] or get(
+            "discovery", "network", "192.168.1.0/24"
+        )
+        local_ip = self._network_info["local_ip"]
+        self._discovery_network = network
+        self._discovery_worker = DiscoveryWorker(
+            network=network, local_ip=local_ip
+        )
         self._discovery_worker.scan_complete.connect(self._on_discovery_complete)
         self._discovery_worker.scan_status.connect(
             self._window.devices_view.set_scan_status
@@ -94,8 +122,8 @@ class NetworkMonitorApp:
 
     def _start_discovery(self):
         if not self._discovery_worker.isRunning():
-            network = get("discovery", "network", "192.168.1.0/24")
-            self._discovery_worker.set_network(network)
+            self._discovery_worker.set_network(self._discovery_network)
+            self._discovery_worker.set_local_ip(self._network_info["local_ip"])
             self._discovery_worker.start()
 
     @Slot(list)
@@ -113,6 +141,11 @@ class NetworkMonitorApp:
         self._port_worker.scan_complete.connect(self._on_port_scan_complete)
         self._port_worker.scan_status.connect(self._window.ports_view.set_status)
         self._window.ports_view.scan_button.clicked.connect(self._start_port_scan)
+
+        # Pre-populate target IP with auto-detected gateway
+        detected_gw = self._network_info["gateway_ip"]
+        if detected_gw:
+            self._window.ports_view.set_target(detected_gw)
 
         # Connect device table selection to port scanner target
         self._window.devices_view.device_table.device_selected.connect(
@@ -182,7 +215,12 @@ class NetworkMonitorApp:
         self._window.dashboard_view.update_alert_count(len(alerts))
 
     def _clear_alerts(self):
+        """Clear all alerts from UI, database, and reset dashboard counter."""
+        db.clear_alerts()
         self._window.alerts_view.clear_alerts()
+        self._window.dashboard_view.update_alert_count(0)
+        # Reset alert engine so conditions can re-fire if still active
+        self._alert_engine.reset()
 
     # ── Error handling ─────────────────────────────────────────
 

@@ -1,6 +1,8 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QLabel,
     QMainWindow,
+    QStatusBar,
     QTabWidget,
     QWidget,
 )
@@ -12,6 +14,7 @@ from src.gui.devices_view import DevicesView
 from src.gui.latency_view import LatencyView
 from src.gui.packets_view import PacketsView
 from src.gui.ports_view import PortsView
+from src.utils.network import is_admin
 
 
 class MainWindow(QMainWindow):
@@ -70,6 +73,38 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(self.alerts_view, "Alerts")
 
         self.setCentralWidget(self._tabs)
+
+        # Status bar
+        self._setup_status_bar()
+
+    def _setup_status_bar(self):
+        status_bar = QStatusBar()
+        status_bar.setStyleSheet(
+            "QStatusBar { background-color: #313244; color: #cdd6f4; "
+            "border-top: 1px solid #45475a; padding: 2px; }"
+            "QStatusBar::item { border: none; }"
+        )
+        self.setStatusBar(status_bar)
+
+        # Admin status
+        if is_admin():
+            admin_label = QLabel("Running as root")
+            admin_label.setStyleSheet("color: #a6e3a1; padding: 0 8px;")
+        else:
+            admin_label = QLabel("Running as user (some features require elevation)")
+            admin_label.setStyleSheet("color: #f9e2af; padding: 0 8px;")
+        status_bar.addWidget(admin_label)
+
+        # Network info placeholder — updated at runtime by app.py
+        self._net_info_label = QLabel("")
+        self._net_info_label.setStyleSheet("color: #a6adc8; padding: 0 8px;")
+        status_bar.addPermanentWidget(self._net_info_label)
+
+    def set_network_status(self, gateway: str, subnet: str):
+        """Update the status bar with detected network info."""
+        self._net_info_label.setText(
+            f"Network: {subnet}  |  Gateway: {gateway}"
+        )
 
     def _apply_theme(self):
         self.setStyleSheet(

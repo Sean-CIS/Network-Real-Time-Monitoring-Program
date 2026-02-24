@@ -144,3 +144,10 @@ def get_recent_alerts(limit: int = 100) -> list[dict]:
         "SELECT * FROM alerts ORDER BY timestamp DESC LIMIT ?", (limit,)
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def clear_alerts():
+    """Delete all alerts from the database."""
+    conn = get_connection()
+    conn.execute("DELETE FROM alerts")
+    conn.commit()

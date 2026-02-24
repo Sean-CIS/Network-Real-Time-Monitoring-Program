@@ -49,10 +49,10 @@ class BandwidthView(QWidget):
 
         # Stat cards row
         cards_layout = QHBoxLayout()
-        self._card_download = StatCard("Download Speed", "—")
-        self._card_upload = StatCard("Upload Speed", "—")
-        self._card_total_down = StatCard("Total Downloaded", "—")
-        self._card_total_up = StatCard("Total Uploaded", "—")
+        self._card_download = StatCard("Download Speed", "\u2014")
+        self._card_upload = StatCard("Upload Speed", "\u2014")
+        self._card_total_down = StatCard("Total Downloaded", "\u2014")
+        self._card_total_up = StatCard("Total Uploaded", "\u2014")
         cards_layout.addWidget(self._card_download)
         cards_layout.addWidget(self._card_upload)
         cards_layout.addWidget(self._card_total_down)

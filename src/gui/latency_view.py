@@ -2,6 +2,7 @@ import math
 
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
+from src.gui import theme
 from src.gui.widgets.live_chart import LiveChart
 from src.gui.widgets.stat_card import StatCard
 
@@ -13,10 +14,10 @@ class LatencyView(QWidget):
 
         # Stat cards
         cards_layout = QHBoxLayout()
-        self._card_avg = StatCard("Avg Latency", "—")
-        self._card_min = StatCard("Min Latency", "—")
-        self._card_max = StatCard("Max Latency", "—")
-        self._card_loss = StatCard("Packet Loss", "—")
+        self._card_avg = StatCard("Avg Latency", "\u2014")
+        self._card_min = StatCard("Min Latency", "\u2014")
+        self._card_max = StatCard("Max Latency", "\u2014")
+        self._card_loss = StatCard("Packet Loss", "\u2014")
         cards_layout.addWidget(self._card_avg)
         cards_layout.addWidget(self._card_min)
         cards_layout.addWidget(self._card_max)
@@ -35,7 +36,9 @@ class LatencyView(QWidget):
 
         # Status label for unreachable hosts
         self._status_label = QLabel("")
-        self._status_label.setStyleSheet("color: #f38ba8; font-size: 12px; padding: 4px;")
+        self._status_label.setStyleSheet(
+            f"color: {theme.RED}; font-size: 12px; padding: 4px;"
+        )
         layout.addWidget(self._status_label)
 
         self._history: dict[str, list[float]] = {}

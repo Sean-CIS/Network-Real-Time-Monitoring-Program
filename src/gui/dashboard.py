@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.gui import theme
 from src.gui.widgets.live_chart import LiveChart
 from src.gui.widgets.stat_card import StatCard
 from src.gui.widgets.traffic_heatmap import TrafficHeatmap
@@ -49,11 +50,11 @@ class SecurityTimeline(QWidget):
             bar_h = max(1, int((total / max_count) * (h - 20))) if total > 0 else 0
 
             if d.get("critical", 0) > 0:
-                color = QColor("#f38ba8")
+                color = QColor(theme.RED)
             elif d.get("warning", 0) > 0:
-                color = QColor("#f9e2af")
+                color = QColor(theme.AMBER)
             else:
-                color = QColor("#94e2d5")
+                color = QColor(theme.GREEN)
 
             painter.fillRect(
                 x_offset + i * bar_w, h - 15 - bar_h,
@@ -62,7 +63,7 @@ class SecurityTimeline(QWidget):
             )
 
         # Draw hour labels every 6 hours
-        painter.setPen(QColor("#a6adc8"))
+        painter.setPen(QColor(theme.GREEN_MUTED))
         for i, d in enumerate(self._hourly_data):
             hr = d.get("hour", i)
             if hr % 6 == 0:
@@ -80,15 +81,15 @@ class DashboardView(QWidget):
 
         # Title row with baseline mode indicator
         title_row = QHBoxLayout()
-        title = QLabel("Network Monitor Dashboard")
+        title = QLabel("[ NETWORK MONITOR DASHBOARD ]")
         title.setStyleSheet(
-            "color: #cdd6f4; font-size: 18px; font-weight: bold; padding: 8px;"
+            f"color: {theme.GREEN}; font-size: 18px; font-weight: bold; padding: 8px;"
         )
         title_row.addWidget(title)
 
         self._baseline_indicator = QLabel("")
         self._baseline_indicator.setStyleSheet(
-            "color: #f9e2af; font-size: 12px; padding: 8px;"
+            f"color: {theme.AMBER}; font-size: 12px; padding: 8px;"
         )
         title_row.addWidget(self._baseline_indicator)
         title_row.addStretch()
@@ -137,7 +138,7 @@ class DashboardView(QWidget):
         # Security timeline
         timeline_label = QLabel("Last 24h Security Events")
         timeline_label.setStyleSheet(
-            "color: #cdd6f4; font-size: 13px; font-weight: bold; padding: 4px 0 0 0;"
+            f"color: {theme.GREEN}; font-size: 13px; font-weight: bold; padding: 4px 0 0 0;"
         )
         layout.addWidget(timeline_label)
         self._security_timeline = SecurityTimeline()
@@ -198,11 +199,11 @@ class DashboardView(QWidget):
     def update_security_score(self, score: int):
         self._card_security_score.set_value(str(score))
         if score >= 80:
-            color = "#a6e3a1"  # green
+            color = theme.GREEN
         elif score >= 50:
-            color = "#f9e2af"  # yellow
+            color = theme.AMBER
         else:
-            color = "#f38ba8"  # red
+            color = theme.RED
         for child in self._card_security_score.findChildren(QLabel):
             if child.text() == str(score):
                 child.setStyleSheet(
@@ -218,14 +219,14 @@ class DashboardView(QWidget):
 
     def update_baseline_mode(self, mode: str):
         if mode == "learning":
-            self._baseline_indicator.setText("Baseline: Learning Mode")
+            self._baseline_indicator.setText("[BASELINE: LEARNING]")
             self._baseline_indicator.setStyleSheet(
-                "color: #f9e2af; font-size: 12px; padding: 8px;"
+                f"color: {theme.AMBER}; font-size: 12px; padding: 8px;"
             )
         elif mode == "monitoring":
-            self._baseline_indicator.setText("Baseline: Monitoring Mode")
+            self._baseline_indicator.setText("[BASELINE: MONITORING]")
             self._baseline_indicator.setStyleSheet(
-                "color: #a6e3a1; font-size: 12px; padding: 8px;"
+                f"color: {theme.GREEN}; font-size: 12px; padding: 8px;"
             )
         else:
             self._baseline_indicator.setText("")

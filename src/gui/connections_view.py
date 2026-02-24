@@ -10,21 +10,22 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.gui import theme
 from src.gui.widgets.stat_card import StatCard
 
-# State-based text colors
+# State-based text colors — CRT palette
 _STATE_COLORS = {
-    "ESTABLISHED": QColor("#a6e3a1"),   # green
-    "CLOSE_WAIT": QColor("#f9e2af"),    # yellow
-    "TIME_WAIT": QColor("#f9e2af"),
-    "FIN_WAIT1": QColor("#f9e2af"),
-    "FIN_WAIT2": QColor("#f9e2af"),
-    "LAST_ACK": QColor("#f9e2af"),
-    "LISTEN": QColor("#6c7086"),        # gray
-    "NONE": QColor("#6c7086"),
+    "ESTABLISHED": QColor(theme.GREEN),        # phosphor green
+    "CLOSE_WAIT": QColor(theme.AMBER),         # amber
+    "TIME_WAIT": QColor(theme.AMBER),
+    "FIN_WAIT1": QColor(theme.AMBER),
+    "FIN_WAIT2": QColor(theme.AMBER),
+    "LAST_ACK": QColor(theme.AMBER),
+    "LISTEN": QColor(theme.GREEN_MUTED),       # dim green
+    "NONE": QColor(theme.GREEN_MUTED),
 }
-_SUSPICIOUS_BG = QColor(243, 139, 168, 40)  # red tint
-_NEW_DEST_BG = QColor(137, 180, 250, 30)    # blue tint
+_SUSPICIOUS_BG = QColor(255, 51, 51, 30)       # red tint
+_NEW_DEST_BG = QColor(0, 255, 65, 20)          # green tint
 
 
 def _format_bytes(b: int) -> str:
@@ -47,10 +48,7 @@ class ConnectionsView(QWidget):
         filter_row.addWidget(QLabel("Filter:"))
         self._filter_input = QLineEdit()
         self._filter_input.setPlaceholderText("Filter by process, IP, or port...")
-        self._filter_input.setStyleSheet(
-            "QLineEdit { background-color: #313244; color: #cdd6f4; "
-            "border: 1px solid #45475a; border-radius: 4px; padding: 4px 8px; }"
-        )
+        self._filter_input.setStyleSheet(theme.INPUT_STYLE)
         self._filter_input.textChanged.connect(self._apply_filter)
         filter_row.addWidget(self._filter_input)
         filter_row.addStretch()
@@ -81,20 +79,7 @@ class ConnectionsView(QWidget):
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setAlternatingRowColors(True)
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self._table.setStyleSheet(
-            """
-            QTableWidget {
-                background-color: #1e1e2e; color: #cdd6f4;
-                gridline-color: #45475a; border: none;
-            }
-            QTableWidget::item:selected { background-color: #45475a; }
-            QHeaderView::section {
-                background-color: #313244; color: #cdd6f4;
-                padding: 6px; border: 1px solid #45475a; font-weight: bold;
-            }
-            QTableWidget::item:alternate { background-color: #181825; }
-            """
-        )
+        self._table.setStyleSheet(theme.TABLE_STYLE)
         layout.addWidget(self._table, stretch=1)
 
         self._all_connections: list[dict] = []
@@ -156,9 +141,9 @@ class ConnectionsView(QWidget):
             for col, text in enumerate(items_data):
                 item = QTableWidgetItem(str(text))
                 if is_suspicious:
-                    item.setForeground(QColor("#f38ba8"))  # red text
+                    item.setForeground(QColor(theme.RED))
                 elif is_new:
-                    item.setForeground(QColor("#89b4fa"))  # blue text for new
+                    item.setForeground(QColor(theme.CYAN))
                 elif state_color:
                     item.setForeground(state_color)
                 if bg_color:

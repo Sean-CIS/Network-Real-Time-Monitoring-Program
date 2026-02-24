@@ -7,7 +7,9 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
 )
 
-_ROGUE_BG = QColor("#3d3820")  # yellow tint for unverified devices
+from src.gui import theme
+
+_ROGUE_BG = QColor(255, 176, 0, 30)  # amber tint for unverified devices
 
 
 class DeviceTable(QTableWidget):
@@ -26,29 +28,7 @@ class DeviceTable(QTableWidget):
         self.setSelectionBehavior(QTableWidget.SelectRows)
         self.setAlternatingRowColors(True)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.setStyleSheet(
-            """
-            QTableWidget {
-                background-color: #1e1e2e;
-                color: #cdd6f4;
-                gridline-color: #45475a;
-                border: none;
-            }
-            QTableWidget::item:selected {
-                background-color: #45475a;
-            }
-            QHeaderView::section {
-                background-color: #313244;
-                color: #cdd6f4;
-                padding: 6px;
-                border: 1px solid #45475a;
-                font-weight: bold;
-            }
-            QTableWidget::item:alternate {
-                background-color: #181825;
-            }
-            """
-        )
+        self.setStyleSheet(theme.TABLE_STYLE)
         self.cellClicked.connect(self._on_cell_clicked)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._context_menu)
@@ -66,6 +46,7 @@ class DeviceTable(QTableWidget):
         if not mac_item or not mac_item.text():
             return
         menu = QMenu(self)
+        menu.setStyleSheet(theme.CONTEXT_MENU)
         trust_action = menu.addAction("Mark as Trusted")
         action = menu.exec(self.viewport().mapToGlobal(pos))
         if action == trust_action:
@@ -93,15 +74,15 @@ class DeviceTable(QTableWidget):
                 item = QTableWidgetItem(text)
                 if is_rogue:
                     item.setBackground(_ROGUE_BG)
-                    item.setForeground(QColor("#f9e2af"))
+                    item.setForeground(QColor(theme.AMBER))
                 self.setItem(row, col, item)
 
             status = "Online" if dev.get("is_online") else "Offline"
             status_item = QTableWidgetItem(status)
             if dev.get("is_online"):
-                status_item.setForeground(Qt.green)
+                status_item.setForeground(QColor(theme.GREEN))
             else:
-                status_item.setForeground(Qt.red)
+                status_item.setForeground(QColor(theme.RED))
             if is_rogue:
                 status_item.setBackground(_ROGUE_BG)
             self.setItem(row, 5, status_item)
@@ -109,6 +90,6 @@ class DeviceTable(QTableWidget):
             last_seen_item = QTableWidgetItem(dev.get("last_seen", ""))
             if is_rogue:
                 last_seen_item.setBackground(_ROGUE_BG)
-                last_seen_item.setForeground(QColor("#f9e2af"))
+                last_seen_item.setForeground(QColor(theme.AMBER))
             self.setItem(row, 6, last_seen_item)
         self.setSortingEnabled(True)

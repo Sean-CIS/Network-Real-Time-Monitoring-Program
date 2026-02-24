@@ -2,6 +2,8 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
+from src.gui import theme
+
 
 class LiveChart(QWidget):
     """A reusable real-time line chart widget using PyQtGraph."""
@@ -19,21 +21,27 @@ class LiveChart(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         self._plot_widget = pg.PlotWidget()
-        self._plot_widget.setBackground("#1e1e2e")
-        self._plot_widget.showGrid(x=True, y=True, alpha=0.3)
-        self._plot_widget.setTitle(title, color="#cdd6f4", size="12pt")
-        self._plot_widget.setLabel("left", y_label, color="#cdd6f4")
-        self._plot_widget.setLabel("bottom", "Time (s)", color="#cdd6f4")
+        self._plot_widget.setBackground(theme.BG_PRIMARY)
+        self._plot_widget.showGrid(x=True, y=True, alpha=0.15)
+        self._plot_widget.setTitle(title, color=theme.GREEN, size="12pt")
+        self._plot_widget.setLabel("left", y_label, color=theme.GREEN_DIM)
+        self._plot_widget.setLabel("bottom", "Time (s)", color=theme.GREEN_DIM)
         self._plot_widget.setLimits(yMin=0)
 
-        colors = ["#89b4fa", "#a6e3a1", "#f9e2af", "#f38ba8", "#cba6f7", "#94e2d5"]
+        # Style axes
+        for axis_name in ("left", "bottom"):
+            axis = self._plot_widget.getAxis(axis_name)
+            axis.setPen(pg.mkPen(color=theme.BORDER, width=1))
+            axis.setTextPen(pg.mkPen(color=theme.GREEN_MUTED))
+
+        colors = theme.CHART_COLORS
         self._lines: list[pg.PlotDataItem] = []
         self._data: list[np.ndarray] = []
         self._x_data = np.array([])
 
         labels = line_labels or [f"Line {i}" for i in range(num_lines)]
         legend = self._plot_widget.addLegend(offset=(10, 10))
-        legend.setLabelTextColor("#cdd6f4")
+        legend.setLabelTextColor(theme.GREEN_DIM)
 
         for i in range(num_lines):
             color = colors[i % len(colors)]
@@ -70,7 +78,7 @@ class LiveChart(QWidget):
 
     def set_y_label(self, label: str):
         """Update the Y-axis label dynamically."""
-        self._plot_widget.setLabel("left", label, color="#cdd6f4")
+        self._plot_widget.setLabel("left", label, color=theme.GREEN_DIM)
 
     def clear_data(self):
         self._x_data = np.array([])

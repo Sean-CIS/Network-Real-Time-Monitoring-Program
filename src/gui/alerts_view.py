@@ -1,4 +1,5 @@
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
@@ -9,6 +10,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.gui import theme
 from src.gui.widgets.stat_card import StatCard
 
 
@@ -20,10 +22,7 @@ class AlertsView(QWidget):
         # Controls
         controls = QHBoxLayout()
         self._clear_btn = QPushButton("Clear All")
-        self._clear_btn.setStyleSheet(
-            "QPushButton { background-color: #f38ba8; color: #1e1e2e; "
-            "padding: 8px 16px; border-radius: 4px; font-weight: bold; }"
-        )
+        self._clear_btn.setStyleSheet(theme.BUTTON_DANGER)
         controls.addWidget(self._clear_btn)
         controls.addStretch()
         layout.addLayout(controls)
@@ -50,20 +49,7 @@ class AlertsView(QWidget):
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setAlternatingRowColors(True)
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self._table.setStyleSheet(
-            """
-            QTableWidget {
-                background-color: #1e1e2e; color: #cdd6f4;
-                gridline-color: #45475a; border: none;
-            }
-            QTableWidget::item:selected { background-color: #45475a; }
-            QHeaderView::section {
-                background-color: #313244; color: #cdd6f4;
-                padding: 6px; border: 1px solid #45475a; font-weight: bold;
-            }
-            QTableWidget::item:alternate { background-color: #181825; }
-            """
-        )
+        self._table.setStyleSheet(theme.TABLE_STYLE)
         layout.addWidget(self._table, stretch=1)
 
     @property
@@ -81,13 +67,13 @@ class AlertsView(QWidget):
             severity = a.get("severity", "info")
             sev_item = QTableWidgetItem(severity.upper())
             if severity == "critical":
-                sev_item.setForeground(Qt.red)
+                sev_item.setForeground(QColor(theme.RED))
                 counts["critical"] += 1
             elif severity == "warning":
-                sev_item.setForeground(Qt.yellow)
+                sev_item.setForeground(QColor(theme.AMBER))
                 counts["warning"] += 1
             else:
-                sev_item.setForeground(Qt.cyan)
+                sev_item.setForeground(QColor(theme.CYAN))
                 counts["info"] += 1
             self._table.setItem(row, 1, sev_item)
 

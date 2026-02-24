@@ -19,18 +19,19 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.gui import theme
 from src.gui.widgets.stat_card import StatCard
 
 _SEVERITY_COLORS = {
-    "critical": QColor("#f38ba8"),
-    "warning": QColor("#f9e2af"),
-    "info": QColor("#94e2d5"),
+    "critical": QColor(theme.RED),
+    "warning": QColor(theme.AMBER),
+    "info": QColor(theme.CYAN),
 }
 
 _THREAT_LEVELS = {
-    "safe": ("#a6e3a1", "SAFE"),
-    "elevated": ("#f9e2af", "ELEVATED"),
-    "critical": ("#f38ba8", "CRITICAL"),
+    "safe": (theme.GREEN, "SAFE"),
+    "elevated": (theme.AMBER, "ELEVATED"),
+    "critical": (theme.RED, "CRITICAL"),
 }
 
 
@@ -43,42 +44,42 @@ class ThreatDashboard(QWidget):
         layout.setContentsMargins(8, 4, 8, 4)
 
         # Threat level badge
-        self._level_label = QLabel("SAFE")
+        self._level_label = QLabel("[ SAFE ]")
         self._level_label.setStyleSheet(
-            "color: #a6e3a1; font-size: 16px; font-weight: bold; padding: 4px 12px;"
+            f"color: {theme.GREEN}; font-size: 16px; font-weight: bold; padding: 4px 12px;"
         )
         layout.addWidget(self._level_label)
 
         # Separator
         sep = QFrame()
         sep.setFrameShape(QFrame.VLine)
-        sep.setStyleSheet("color: #45475a;")
+        sep.setStyleSheet(f"color: {theme.BORDER};")
         layout.addWidget(sep)
 
         # Stats
         self._external_ips = QLabel("External IPs: 0")
-        self._external_ips.setStyleSheet("color: #a6adc8; padding: 0 8px;")
+        self._external_ips.setStyleSheet(f"color: {theme.GREEN_MUTED}; padding: 0 8px;")
         layout.addWidget(self._external_ips)
 
         self._unresolved = QLabel("Unresolved: 0")
-        self._unresolved.setStyleSheet("color: #a6adc8; padding: 0 8px;")
+        self._unresolved.setStyleSheet(f"color: {theme.GREEN_MUTED}; padding: 0 8px;")
         layout.addWidget(self._unresolved)
 
         self._events_24h = QLabel("24h Events: 0")
-        self._events_24h.setStyleSheet("color: #a6adc8; padding: 0 8px;")
+        self._events_24h.setStyleSheet(f"color: {theme.GREEN_MUTED}; padding: 0 8px;")
         layout.addWidget(self._events_24h)
 
         layout.addStretch()
 
         self.setStyleSheet(
-            "ThreatDashboard { background-color: #181825; "
-            "border: 1px solid #45475a; border-radius: 6px; }"
+            f"ThreatDashboard {{ background-color: {theme.BG_SURFACE}; "
+            f"border: 1px solid {theme.BORDER}; border-radius: 2px; }}"
         )
 
     def update_threat_level(self, level: str):
         """Set threat level: 'safe', 'elevated', or 'critical'."""
         color, text = _THREAT_LEVELS.get(level, _THREAT_LEVELS["safe"])
-        self._level_label.setText(text)
+        self._level_label.setText(f"[ {text} ]")
         self._level_label.setStyleSheet(
             f"color: {color}; font-size: 16px; font-weight: bold; padding: 4px 12px;"
         )
@@ -95,13 +96,14 @@ class FirewallRuleDialog(QDialog):
 
     def __init__(self, rules: dict, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Firewall Rule Suggestion")
+        self.setWindowTitle("[ FIREWALL RULE ]")
         self.setMinimumWidth(600)
         self.setStyleSheet(
-            "QDialog { background-color: #1e1e2e; color: #cdd6f4; }"
-            "QLabel { color: #cdd6f4; }"
-            "QTextEdit { background-color: #313244; color: #a6e3a1; "
-            "border: 1px solid #45475a; border-radius: 4px; font-family: monospace; }"
+            f"QDialog {{ background-color: {theme.BG_PRIMARY}; color: {theme.GREEN}; }}"
+            f"QLabel {{ color: {theme.GREEN}; }}"
+            f"QTextEdit {{ background-color: {theme.BG_SURFACE}; color: {theme.GREEN}; "
+            f"border: 1px solid {theme.BORDER}; border-radius: 2px; "
+            f'font-family: "Courier New", "Consolas", monospace; }}'
         )
 
         layout = QVBoxLayout(self)
@@ -120,10 +122,7 @@ class FirewallRuleDialog(QDialog):
         layout.addWidget(linux_text)
 
         linux_copy = QPushButton("Copy Linux Command")
-        linux_copy.setStyleSheet(
-            "QPushButton { background-color: #89b4fa; color: #1e1e2e; "
-            "padding: 6px 12px; border-radius: 4px; font-weight: bold; }"
-        )
+        linux_copy.setStyleSheet(theme.BUTTON_PRIMARY)
         linux_copy.clicked.connect(
             lambda: QApplication.clipboard().setText(rules.get("linux", ""))
         )
@@ -138,20 +137,14 @@ class FirewallRuleDialog(QDialog):
         layout.addWidget(win_text)
 
         win_copy = QPushButton("Copy Windows Command")
-        win_copy.setStyleSheet(
-            "QPushButton { background-color: #89b4fa; color: #1e1e2e; "
-            "padding: 6px 12px; border-radius: 4px; font-weight: bold; }"
-        )
+        win_copy.setStyleSheet(theme.BUTTON_PRIMARY)
         win_copy.clicked.connect(
             lambda: QApplication.clipboard().setText(rules.get("windows", ""))
         )
         layout.addWidget(win_copy)
 
         close_btn = QPushButton("Close")
-        close_btn.setStyleSheet(
-            "QPushButton { background-color: #45475a; color: #cdd6f4; "
-            "padding: 6px 12px; border-radius: 4px; }"
-        )
+        close_btn.setStyleSheet(theme.BUTTON_SECONDARY)
         close_btn.clicked.connect(self.close)
         layout.addWidget(close_btn, alignment=Qt.AlignRight)
 
@@ -168,10 +161,7 @@ class SecurityEventsView(QWidget):
         # Controls row
         controls = QHBoxLayout()
         self._clear_btn = QPushButton("Clear All")
-        self._clear_btn.setStyleSheet(
-            "QPushButton { background-color: #f38ba8; color: #1e1e2e; "
-            "padding: 8px 16px; border-radius: 4px; font-weight: bold; }"
-        )
+        self._clear_btn.setStyleSheet(theme.BUTTON_DANGER)
         controls.addWidget(self._clear_btn)
 
         self._severity_filter = QComboBox()
@@ -205,20 +195,7 @@ class SecurityEventsView(QWidget):
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self._table.setContextMenuPolicy(Qt.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._show_context_menu)
-        self._table.setStyleSheet(
-            """
-            QTableWidget {
-                background-color: #1e1e2e; color: #cdd6f4;
-                gridline-color: #45475a; border: none;
-            }
-            QTableWidget::item:selected { background-color: #45475a; }
-            QHeaderView::section {
-                background-color: #313244; color: #cdd6f4;
-                padding: 6px; border: 1px solid #45475a; font-weight: bold;
-            }
-            QTableWidget::item:alternate { background-color: #181825; }
-            """
-        )
+        self._table.setStyleSheet(theme.TABLE_STYLE)
         layout.addWidget(self._table, stretch=1)
 
         self._all_events: list[dict] = []
@@ -256,11 +233,7 @@ class SecurityEventsView(QWidget):
             return
 
         menu = QMenu(self)
-        menu.setStyleSheet(
-            "QMenu { background-color: #313244; color: #cdd6f4; "
-            "border: 1px solid #45475a; }"
-            "QMenu::item:selected { background-color: #45475a; }"
-        )
+        menu.setStyleSheet(theme.CONTEXT_MENU)
 
         fw_action = QAction("Generate Firewall Rule", self)
         fw_action.triggered.connect(lambda: self._generate_firewall_rule(row))

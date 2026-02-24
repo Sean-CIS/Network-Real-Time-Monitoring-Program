@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.gui import theme
 from src.gui.widgets.device_table import DeviceTable
 from src.gui.widgets.stat_card import StatCard
 
@@ -22,13 +23,9 @@ class DevicesView(QWidget):
         # Header row
         header = QHBoxLayout()
         self._scan_btn = QPushButton("Scan Now")
-        self._scan_btn.setStyleSheet(
-            "QPushButton { background-color: #89b4fa; color: #1e1e2e; "
-            "padding: 8px 16px; border-radius: 4px; font-weight: bold; }"
-            "QPushButton:hover { background-color: #74c7ec; }"
-        )
+        self._scan_btn.setStyleSheet(theme.BUTTON_PRIMARY)
         self._status_label = QLabel("Ready")
-        self._status_label.setStyleSheet("color: #a6adc8;")
+        self._status_label.setStyleSheet(f"color: {theme.GREEN_MUTED};")
         header.addWidget(self._scan_btn)
         header.addWidget(self._status_label)
         header.addStretch()
@@ -53,11 +50,7 @@ class DevicesView(QWidget):
 
         # ARP Cache collapsible sub-panel
         self._arp_header = QPushButton("\u25b6 ARP Cache")
-        self._arp_header.setStyleSheet(
-            "QPushButton { color: #cdd6f4; font-size: 13px; font-weight: bold; "
-            "background: transparent; border: none; text-align: left; padding: 4px; }"
-            "QPushButton:hover { color: #89b4fa; }"
-        )
+        self._arp_header.setStyleSheet(theme.COLLAPSIBLE_HEADER)
         self._arp_header.clicked.connect(self._toggle_arp)
         layout.addWidget(self._arp_header)
 
@@ -68,18 +61,7 @@ class DevicesView(QWidget):
         self._arp_table.setMaximumHeight(200)
         self._arp_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._arp_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self._arp_table.setStyleSheet(
-            """
-            QTableWidget {
-                background-color: #1e1e2e; color: #cdd6f4;
-                gridline-color: #45475a; border: none;
-            }
-            QHeaderView::section {
-                background-color: #313244; color: #cdd6f4;
-                padding: 4px; border: 1px solid #45475a; font-weight: bold;
-            }
-            """
-        )
+        self._arp_table.setStyleSheet(theme.TABLE_STYLE)
         self._arp_table.setVisible(False)
         layout.addWidget(self._arp_table)
 

@@ -1,21 +1,23 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
 
+from src.gui import theme
+
 
 class StatCard(QFrame):
     """A small card widget displaying a label and a value."""
 
-    def __init__(self, title: str = "", value: str = "—", parent=None):
+    def __init__(self, title: str = "", value: str = "\u2014", parent=None):
         super().__init__(parent)
         self.setFrameShape(QFrame.StyledPanel)
         self.setStyleSheet(
-            """
-            StatCard {
-                background-color: #313244;
-                border: 1px solid #45475a;
-                border-radius: 8px;
+            f"""
+            StatCard {{
+                background-color: {theme.BG_SURFACE};
+                border: 1px solid {theme.BORDER};
+                border-radius: 2px;
                 padding: 12px;
-            }
+            }}
             """
         )
         self.setMinimumWidth(160)
@@ -25,11 +27,15 @@ class StatCard(QFrame):
         layout.setSpacing(4)
 
         self._title_label = QLabel(title)
-        self._title_label.setStyleSheet("color: #a6adc8; font-size: 11px;")
+        self._title_label.setStyleSheet(
+            f"color: {theme.GREEN_MUTED}; font-size: 11px;"
+        )
         self._title_label.setAlignment(Qt.AlignLeft)
 
         self._value_label = QLabel(value)
-        self._value_label.setStyleSheet("color: #cdd6f4; font-size: 20px; font-weight: bold;")
+        self._value_label.setStyleSheet(
+            f"color: {theme.GREEN}; font-size: 20px; font-weight: bold;"
+        )
         self._value_label.setAlignment(Qt.AlignLeft)
 
         layout.addWidget(self._title_label)

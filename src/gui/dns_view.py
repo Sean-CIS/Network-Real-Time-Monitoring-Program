@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.gui import theme
 from src.gui.widgets.stat_card import StatCard
 from src.utils import db
 
@@ -29,26 +30,17 @@ class DNSView(QWidget):
         search_row.addWidget(QLabel("Search:"))
         self._search_input = QLineEdit()
         self._search_input.setPlaceholderText("Search DNS queries (e.g. google.com)...")
-        self._search_input.setStyleSheet(
-            "QLineEdit { background-color: #313244; color: #cdd6f4; "
-            "border: 1px solid #45475a; border-radius: 4px; padding: 4px 8px; }"
-        )
+        self._search_input.setStyleSheet(theme.INPUT_STYLE)
         self._search_input.returnPressed.connect(self._do_search)
         search_row.addWidget(self._search_input)
 
         self._search_btn = QPushButton("Search")
-        self._search_btn.setStyleSheet(
-            "QPushButton { background-color: #89b4fa; color: #1e1e2e; "
-            "padding: 6px 12px; border-radius: 4px; font-weight: bold; }"
-        )
+        self._search_btn.setStyleSheet(theme.BUTTON_PRIMARY)
         self._search_btn.clicked.connect(self._do_search)
         search_row.addWidget(self._search_btn)
 
         self._refresh_btn = QPushButton("Refresh")
-        self._refresh_btn.setStyleSheet(
-            "QPushButton { background-color: #94e2d5; color: #1e1e2e; "
-            "padding: 6px 12px; border-radius: 4px; font-weight: bold; }"
-        )
+        self._refresh_btn.setStyleSheet(theme.BUTTON_CYAN)
         self._refresh_btn.clicked.connect(self.refresh)
         search_row.addWidget(self._refresh_btn)
         search_row.addStretch()
@@ -74,20 +66,7 @@ class DNSView(QWidget):
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setAlternatingRowColors(True)
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self._table.setStyleSheet(
-            """
-            QTableWidget {
-                background-color: #1e1e2e; color: #cdd6f4;
-                gridline-color: #45475a; border: none;
-            }
-            QTableWidget::item:selected { background-color: #45475a; }
-            QHeaderView::section {
-                background-color: #313244; color: #cdd6f4;
-                padding: 6px; border: 1px solid #45475a; font-weight: bold;
-            }
-            QTableWidget::item:alternate { background-color: #181825; }
-            """
-        )
+        self._table.setStyleSheet(theme.TABLE_STYLE)
         layout.addWidget(self._table, stretch=1)
 
     def refresh(self):

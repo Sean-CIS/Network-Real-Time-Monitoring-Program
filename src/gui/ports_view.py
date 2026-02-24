@@ -12,12 +12,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.gui import theme
 from src.utils.vuln_hints import PORT_HINTS
 
 _HINT_COLORS = {
-    "critical": QColor("#f38ba8"),
-    "warning": QColor("#f9e2af"),
-    "info": QColor("#94e2d5"),
+    "critical": QColor(theme.RED),
+    "warning": QColor(theme.AMBER),
+    "info": QColor(theme.CYAN),
 }
 
 
@@ -43,24 +44,16 @@ class PortsView(QWidget):
         input_layout.addWidget(self._ports_input)
 
         self._scan_btn = QPushButton("Scan Ports")
-        self._scan_btn.setStyleSheet(
-            "QPushButton { background-color: #89b4fa; color: #1e1e2e; "
-            "padding: 8px 16px; border-radius: 4px; font-weight: bold; }"
-            "QPushButton:hover { background-color: #74c7ec; }"
-        )
+        self._scan_btn.setStyleSheet(theme.BUTTON_PRIMARY)
         input_layout.addWidget(self._scan_btn)
 
         self._quick_scan_btn = QPushButton("Quick Security Scan")
-        self._quick_scan_btn.setStyleSheet(
-            "QPushButton { background-color: #fab387; color: #1e1e2e; "
-            "padding: 8px 16px; border-radius: 4px; font-weight: bold; }"
-            "QPushButton:hover { background-color: #f9e2af; }"
-        )
+        self._quick_scan_btn.setStyleSheet(theme.BUTTON_ACCENT)
         self._quick_scan_btn.clicked.connect(self.quick_scan_clicked.emit)
         input_layout.addWidget(self._quick_scan_btn)
 
         self._status_label = QLabel("Ready")
-        self._status_label.setStyleSheet("color: #a6adc8;")
+        self._status_label.setStyleSheet(f"color: {theme.GREEN_MUTED};")
         input_layout.addWidget(self._status_label)
         input_layout.addStretch()
         layout.addLayout(input_layout)
@@ -74,20 +67,7 @@ class PortsView(QWidget):
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setAlternatingRowColors(True)
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self._table.setStyleSheet(
-            """
-            QTableWidget {
-                background-color: #1e1e2e; color: #cdd6f4;
-                gridline-color: #45475a; border: none;
-            }
-            QTableWidget::item:selected { background-color: #45475a; }
-            QHeaderView::section {
-                background-color: #313244; color: #cdd6f4;
-                padding: 6px; border: 1px solid #45475a; font-weight: bold;
-            }
-            QTableWidget::item:alternate { background-color: #181825; }
-            """
-        )
+        self._table.setStyleSheet(theme.TABLE_STYLE)
         layout.addWidget(self._table, stretch=1)
 
     @property

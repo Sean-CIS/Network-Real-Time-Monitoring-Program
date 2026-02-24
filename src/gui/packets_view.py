@@ -12,21 +12,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.gui import theme
 from src.gui.widgets.live_chart import LiveChart
 from src.gui.widgets.stat_card import StatCard
 
 _THREAT_COLORS = {
-    "critical": QColor("#3d2030"),
-    "warning": QColor("#3d3820"),
+    "critical": QColor(255, 51, 51, 30),
+    "warning": QColor(255, 176, 0, 30),
 }
-
-# Colors for protocol pie chart
-_PIE_COLORS = [
-    QColor("#89b4fa"), QColor("#a6e3a1"), QColor("#f9e2af"),
-    QColor("#f38ba8"), QColor("#cba6f7"), QColor("#94e2d5"),
-    QColor("#fab387"), QColor("#74c7ec"), QColor("#f5c2e7"),
-    QColor("#b4befe"),
-]
 
 
 class ProtocolPieChart(QWidget):
@@ -63,18 +56,18 @@ class ProtocolPieChart(QWidget):
         sorted_items = sorted(self._data.items(), key=lambda x: x[1], reverse=True)
         for i, (proto, count) in enumerate(sorted_items[:10]):
             span_angle = int(count / total * 5760)  # Qt uses 1/16th degrees
-            color = _PIE_COLORS[i % len(_PIE_COLORS)]
+            color = theme.PIE_COLORS[i % len(theme.PIE_COLORS)]
             painter.setBrush(color)
-            painter.setPen(QColor("#313244"))
+            painter.setPen(QColor(theme.BG_SURFACE))
             painter.drawPie(x, y, pie_size, pie_size, start_angle, span_angle)
             start_angle += span_angle
 
         # Draw legend
         legend_x = x + pie_size + 15
         legend_y = 10
-        painter.setPen(QColor("#cdd6f4"))
+        painter.setPen(QColor(theme.GREEN))
         for i, (proto, count) in enumerate(sorted_items[:8]):
-            color = _PIE_COLORS[i % len(_PIE_COLORS)]
+            color = theme.PIE_COLORS[i % len(theme.PIE_COLORS)]
             pct = count / total * 100
             painter.fillRect(legend_x, legend_y + i * 17, 12, 12, color)
             painter.drawText(
@@ -98,15 +91,9 @@ class PacketsView(QWidget):
         # Controls row 1: capture controls
         controls = QHBoxLayout()
         self._start_btn = QPushButton("Start Capture")
-        self._start_btn.setStyleSheet(
-            "QPushButton { background-color: #a6e3a1; color: #1e1e2e; "
-            "padding: 8px 16px; border-radius: 4px; font-weight: bold; }"
-        )
+        self._start_btn.setStyleSheet(theme.BUTTON_PRIMARY)
         self._stop_btn = QPushButton("Stop Capture")
-        self._stop_btn.setStyleSheet(
-            "QPushButton { background-color: #f38ba8; color: #1e1e2e; "
-            "padding: 8px 16px; border-radius: 4px; font-weight: bold; }"
-        )
+        self._stop_btn.setStyleSheet(theme.BUTTON_DANGER)
         self._stop_btn.setEnabled(False)
 
         controls.addWidget(self._start_btn)
@@ -118,7 +105,7 @@ class PacketsView(QWidget):
         controls.addWidget(self._filter_input)
 
         self._packet_count_label = QLabel("Packets: 0")
-        self._packet_count_label.setStyleSheet("color: #a6adc8;")
+        self._packet_count_label.setStyleSheet(f"color: {theme.GREEN_MUTED};")
         controls.addWidget(self._packet_count_label)
         controls.addStretch()
         layout.addLayout(controls)
@@ -126,34 +113,22 @@ class PacketsView(QWidget):
         # Controls row 2: export buttons
         export_row = QHBoxLayout()
         self._export_pcap_btn = QPushButton("Export PCAP")
-        self._export_pcap_btn.setStyleSheet(
-            "QPushButton { background-color: #89b4fa; color: #1e1e2e; "
-            "padding: 6px 12px; border-radius: 4px; font-weight: bold; }"
-        )
+        self._export_pcap_btn.setStyleSheet(theme.BUTTON_SECONDARY)
         self._export_pcap_btn.setEnabled(False)
         self._export_pcap_btn.clicked.connect(self.export_pcap_clicked.emit)
 
         self._export_csv_btn = QPushButton("Export CSV")
-        self._export_csv_btn.setStyleSheet(
-            "QPushButton { background-color: #89b4fa; color: #1e1e2e; "
-            "padding: 6px 12px; border-radius: 4px; font-weight: bold; }"
-        )
+        self._export_csv_btn.setStyleSheet(theme.BUTTON_SECONDARY)
         self._export_csv_btn.setEnabled(False)
         self._export_csv_btn.clicked.connect(self.export_csv_clicked.emit)
 
         self._report_btn = QPushButton("Generate Report")
-        self._report_btn.setStyleSheet(
-            "QPushButton { background-color: #cba6f7; color: #1e1e2e; "
-            "padding: 6px 12px; border-radius: 4px; font-weight: bold; }"
-        )
+        self._report_btn.setStyleSheet(theme.BUTTON_ACCENT)
         self._report_btn.setEnabled(False)
         self._report_btn.clicked.connect(self.generate_report_clicked.emit)
 
         self._load_pcap_btn = QPushButton("Load PCAP")
-        self._load_pcap_btn.setStyleSheet(
-            "QPushButton { background-color: #f9e2af; color: #1e1e2e; "
-            "padding: 6px 12px; border-radius: 4px; font-weight: bold; }"
-        )
+        self._load_pcap_btn.setStyleSheet(theme.BUTTON_CYAN)
         self._load_pcap_btn.clicked.connect(self.load_pcap_clicked.emit)
 
         export_row.addWidget(self._export_pcap_btn)
@@ -180,11 +155,7 @@ class PacketsView(QWidget):
 
         # Top Talkers collapsible section (collapsed by default)
         self._talkers_header = QPushButton("\u25b6 Top Talkers")
-        self._talkers_header.setStyleSheet(
-            "QPushButton { color: #cdd6f4; font-size: 13px; font-weight: bold; "
-            "background: transparent; border: none; text-align: left; padding: 4px; }"
-            "QPushButton:hover { color: #89b4fa; }"
-        )
+        self._talkers_header.setStyleSheet(theme.COLLAPSIBLE_HEADER)
         self._talkers_header.setCursor(self._talkers_header.cursor())
         self._talkers_header.clicked.connect(self._toggle_talkers)
         layout.addWidget(self._talkers_header)
@@ -196,28 +167,13 @@ class PacketsView(QWidget):
         self._talkers_table.setMaximumHeight(200)
         self._talkers_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._talkers_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self._talkers_table.setStyleSheet(
-            """
-            QTableWidget {
-                background-color: #1e1e2e; color: #cdd6f4;
-                gridline-color: #45475a; border: none;
-            }
-            QHeaderView::section {
-                background-color: #313244; color: #cdd6f4;
-                padding: 4px; border: 1px solid #45475a; font-weight: bold;
-            }
-            """
-        )
+        self._talkers_table.setStyleSheet(theme.TABLE_STYLE)
         self._talkers_table.setVisible(False)  # collapsed by default
         layout.addWidget(self._talkers_table)
 
         # Protocol distribution (collapsible)
         self._proto_dist_header = QPushButton("\u25b6 Protocol Distribution")
-        self._proto_dist_header.setStyleSheet(
-            "QPushButton { color: #cdd6f4; font-size: 13px; font-weight: bold; "
-            "background: transparent; border: none; text-align: left; padding: 4px; }"
-            "QPushButton:hover { color: #89b4fa; }"
-        )
+        self._proto_dist_header.setStyleSheet(theme.COLLAPSIBLE_HEADER)
         self._proto_dist_header.clicked.connect(self._toggle_proto_dist)
         layout.addWidget(self._proto_dist_header)
 
@@ -247,20 +203,7 @@ class PacketsView(QWidget):
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setAlternatingRowColors(True)
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self._table.setStyleSheet(
-            """
-            QTableWidget {
-                background-color: #1e1e2e; color: #cdd6f4;
-                gridline-color: #45475a; border: none;
-            }
-            QTableWidget::item:selected { background-color: #45475a; }
-            QHeaderView::section {
-                background-color: #313244; color: #cdd6f4;
-                padding: 6px; border: 1px solid #45475a; font-weight: bold;
-            }
-            QTableWidget::item:alternate { background-color: #181825; }
-            """
-        )
+        self._table.setStyleSheet(theme.TABLE_STYLE)
         layout.addWidget(self._table, stretch=1)
 
         self._packet_count = 0
@@ -373,9 +316,9 @@ class PacketsView(QWidget):
             if bg_color:
                 item.setBackground(bg_color)
             if threat == "critical":
-                item.setForeground(QColor("#f38ba8"))
+                item.setForeground(QColor(theme.RED))
             elif threat == "warning":
-                item.setForeground(QColor("#f9e2af"))
+                item.setForeground(QColor(theme.AMBER))
             self._table.setItem(row, col, item)
 
         self._table.scrollToBottom()

@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
     QTabWidget,
 )
 
+from src.gui import theme
 from src.gui.alerts_view import AlertsView
 from src.gui.bandwidth_view import BandwidthView
 from src.gui.connections_view import ConnectionsView
@@ -15,13 +16,14 @@ from src.gui.latency_view import LatencyView
 from src.gui.packets_view import PacketsView
 from src.gui.ports_view import PortsView
 from src.gui.security_events_view import SecurityEventsView
+from src.gui.theme import ScanlineOverlay
 from src.utils.network import is_admin
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Network Real-Time Monitor")
+        self.setWindowTitle("[ NETWORK REAL-TIME MONITOR ]")
         self.setMinimumSize(1200, 700)
         self.resize(1400, 800)
 
@@ -30,30 +32,7 @@ class MainWindow(QMainWindow):
         # Central tab widget
         self._tabs = QTabWidget()
         self._tabs.setTabPosition(QTabWidget.North)
-        self._tabs.setStyleSheet(
-            """
-            QTabWidget::pane {
-                border: 1px solid #45475a;
-                background-color: #1e1e2e;
-            }
-            QTabBar::tab {
-                background-color: #313244;
-                color: #cdd6f4;
-                padding: 10px 20px;
-                margin-right: 2px;
-                border-top-left-radius: 4px;
-                border-top-right-radius: 4px;
-            }
-            QTabBar::tab:selected {
-                background-color: #45475a;
-                color: #89b4fa;
-                font-weight: bold;
-            }
-            QTabBar::tab:hover {
-                background-color: #585b70;
-            }
-            """
-        )
+        self._tabs.setStyleSheet(theme.TAB_STYLESHEET)
 
         # Create views
         self.dashboard_view = DashboardView()
@@ -84,78 +63,37 @@ class MainWindow(QMainWindow):
         # Status bar
         self._setup_status_bar()
 
+        # CRT scanline overlay
+        self._scanlines = ScanlineOverlay(self)
+        self._scanlines.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._scanlines.setGeometry(self.rect())
+
     def _setup_status_bar(self):
         status_bar = QStatusBar()
-        status_bar.setStyleSheet(
-            "QStatusBar { background-color: #313244; color: #cdd6f4; "
-            "border-top: 1px solid #45475a; padding: 2px; }"
-            "QStatusBar::item { border: none; }"
-        )
+        status_bar.setStyleSheet(theme.STATUS_BAR_STYLE)
         self.setStatusBar(status_bar)
 
         # Admin status
         if is_admin():
-            admin_label = QLabel("Running as root")
-            admin_label.setStyleSheet("color: #a6e3a1; padding: 0 8px;")
+            admin_label = QLabel("[ROOT]")
+            admin_label.setStyleSheet(f"color: {theme.GREEN}; padding: 0 8px;")
         else:
-            admin_label = QLabel("Running as user (some features require elevation)")
-            admin_label.setStyleSheet("color: #f9e2af; padding: 0 8px;")
+            admin_label = QLabel("[USER] some features require elevation")
+            admin_label.setStyleSheet(f"color: {theme.AMBER}; padding: 0 8px;")
         status_bar.addWidget(admin_label)
 
         # Network info placeholder — updated at runtime by app.py
         self._net_info_label = QLabel("")
-        self._net_info_label.setStyleSheet("color: #a6adc8; padding: 0 8px;")
+        self._net_info_label.setStyleSheet(f"color: {theme.GREEN_DIM}; padding: 0 8px;")
         status_bar.addPermanentWidget(self._net_info_label)
 
     def set_network_status(self, gateway: str, subnet: str):
         self._net_info_label.setText(
-            f"Network: {subnet}  |  Gateway: {gateway}"
+            f"NET: {subnet}  |  GW: {gateway}"
         )
 
     def _apply_theme(self):
-        self.setStyleSheet(
-            """
-            QMainWindow {
-                background-color: #1e1e2e;
-            }
-            QWidget {
-                background-color: #1e1e2e;
-                color: #cdd6f4;
-                font-family: "Segoe UI", "Consolas", monospace;
-                font-size: 13px;
-            }
-            QLabel {
-                color: #cdd6f4;
-            }
-            QLineEdit {
-                background-color: #313244;
-                color: #cdd6f4;
-                border: 1px solid #45475a;
-                border-radius: 4px;
-                padding: 6px;
-            }
-            QComboBox {
-                background-color: #313244;
-                color: #cdd6f4;
-                border: 1px solid #45475a;
-                border-radius: 4px;
-                padding: 6px;
-            }
-            QComboBox::drop-down {
-                border: none;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #313244;
-                color: #cdd6f4;
-                selection-background-color: #45475a;
-            }
-            QScrollBar:vertical {
-                background: #1e1e2e;
-                width: 10px;
-            }
-            QScrollBar::handle:vertical {
-                background: #45475a;
-                border-radius: 5px;
-            }
-            """
-        )
+        self.setStyleSheet(theme.GLOBAL_STYLESHEET)

@@ -1,0 +1,41 @@
+# Network Real-Time Monitoring Program Configuration
+
+general:
+  update_interval_ms: 1000        # How often charts refresh (milliseconds)
+  data_retention_hours: 24        # How long to keep historical data
+
+bandwidth:
+  enabled: true
+  poll_interval_s: 1              # Seconds between bandwidth samples
+
+latency:
+  enabled: true
+  poll_interval_s: 2              # Seconds between ping rounds
+  targets:
+    - host: 8.8.8.8
+      label: "Google DNS"
+    - host: 1.1.1.1
+      label: "Cloudflare DNS"
+    - host: 192.168.1.1
+      label: "Default Gateway"
+
+discovery:
+  enabled: true
+  auto_scan_interval_s: 300       # Seconds between automatic scans
+  network: "192.168.1.0/24"       # Network range to scan
+  nmap_os_detection: false        # Requires root/admin privileges
+
+port_scanner:
+  default_ports: "1-1024"         # Default port range
+  scan_arguments: "-sV"           # nmap arguments
+
+packet_capture:
+  enabled: true
+  max_packets_display: 1000       # Max packets shown in live table
+  default_filter: ""              # BPF filter string
+
+alerts:
+  enabled: true
+  bandwidth_threshold_mbps: 100   # Alert if bandwidth exceeds this
+  latency_threshold_ms: 200       # Alert if ping exceeds this
+  device_offline_timeout_s: 60    # Alert if device not seen for this long

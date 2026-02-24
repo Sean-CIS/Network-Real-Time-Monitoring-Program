@@ -1,0 +1,11 @@
+PySide6>=6.6.0
+pyqtgraph>=0.13.3
+pglive>=0.7.0
+psutil>=5.9.0
+scapy>=2.5.0
+icmplib>=3.0.0
+python-nmap>=0.7.1
+pysnmp>=4.4.12
+pyyaml>=6.0
+plyer>=2.1.0
+numpy>=1.24.0

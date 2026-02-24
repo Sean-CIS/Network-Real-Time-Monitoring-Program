@@ -80,6 +80,81 @@ class TestGatewayFromProcRoute(unittest.TestCase):
         self.assertEqual(gw, "")
 
 
+class TestGatewayFromRoutePrint(unittest.TestCase):
+    """Tests for Windows `route print` gateway detection."""
+
+    ROUTE_PRINT_OUTPUT = (
+        "===========================================================================\n"
+        "Interface List\n"
+        "===========================================================================\n"
+        "\n"
+        "IPv4 Route Table\n"
+        "===========================================================================\n"
+        "Active Routes:\n"
+        "Network Destination        Netmask          Gateway       Interface  Metric\n"
+        "          0.0.0.0          0.0.0.0      192.168.0.1    192.168.0.105     25\n"
+        "      192.168.0.0    255.255.255.0         On-link     192.168.0.105    281\n"
+        "===========================================================================\n"
+    )
+
+    @patch("src.utils.network.subprocess.run")
+    def test_parses_route_print_correctly(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout=self.ROUTE_PRINT_OUTPUT)
+
+        from src.utils.network import _gateway_from_route_print
+
+        gw = _gateway_from_route_print()
+        self.assertEqual(gw, "192.168.0.1")
+        mock_run.assert_called_once_with(
+            ["route", "print", "0.0.0.0"],
+            capture_output=True, text=True, timeout=5,
+        )
+
+    @patch("src.utils.network.subprocess.run")
+    def test_route_print_no_default_route(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="IPv4 Route Table\nNo routes found.\n",
+        )
+
+        from src.utils.network import _gateway_from_route_print
+
+        gw = _gateway_from_route_print()
+        self.assertEqual(gw, "")
+
+    @patch("src.utils.network.subprocess.run", side_effect=FileNotFoundError)
+    def test_route_command_not_found(self, mock_run):
+        from src.utils.network import _gateway_from_route_print
+
+        gw = _gateway_from_route_print()
+        self.assertEqual(gw, "")
+
+
+class TestGatewayFromLocalIp(unittest.TestCase):
+    """Tests for the last-resort gateway derivation from local IP."""
+
+    @patch("src.utils.network._detect_local_ip", return_value="192.168.0.105")
+    def test_derives_gateway_from_local_ip(self, mock_ip):
+        from src.utils.network import _gateway_from_local_ip
+
+        gw = _gateway_from_local_ip()
+        self.assertEqual(gw, "192.168.0.1")
+
+    @patch("src.utils.network._detect_local_ip", return_value="10.0.2.15")
+    def test_derives_10_network_gateway(self, mock_ip):
+        from src.utils.network import _gateway_from_local_ip
+
+        gw = _gateway_from_local_ip()
+        self.assertEqual(gw, "10.0.2.1")
+
+    @patch("src.utils.network._detect_local_ip", return_value="127.0.0.1")
+    def test_skips_localhost(self, mock_ip):
+        from src.utils.network import _gateway_from_local_ip
+
+        gw = _gateway_from_local_ip()
+        self.assertEqual(gw, "")
+
+
 class TestIsAdmin(unittest.TestCase):
     def test_returns_bool(self):
         from src.utils.network import is_admin

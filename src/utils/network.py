@@ -38,9 +38,17 @@ def _detect_gateway() -> str:
         gw = _gateway_from_ipconfig()
         if gw:
             return gw
+        gw = _gateway_from_route_print()
+        if gw:
+            return gw
 
     # Fallback: try parsing `ip route` or `route` command output
     gw = _gateway_from_route_command()
+    if gw:
+        return gw
+
+    # Last resort: derive gateway from local IP (assume .1)
+    gw = _gateway_from_local_ip()
     if gw:
         return gw
 
@@ -66,13 +74,17 @@ def _gateway_from_proc_route() -> str:
 
 
 def _gateway_from_ipconfig() -> str:
-    """Parse ipconfig output to find the default gateway (Windows)."""
+    """Parse ipconfig output to find the default gateway (Windows).
+
+    Works on English Windows. Non-English locales use different labels,
+    so _gateway_from_route_print() is the more reliable Windows fallback.
+    """
     try:
         result = subprocess.run(
             ["ipconfig"], capture_output=True, text=True, timeout=5
         )
         for line in result.stdout.split("\n"):
-            if "default gateway" in line.lower():
+            if "default gateway" in line.lower() or "gateway" in line.lower():
                 match = re.search(r"(\d+\.\d+\.\d+\.\d+)", line)
                 if match:
                     return match.group(1)
@@ -81,19 +93,58 @@ def _gateway_from_ipconfig() -> str:
     return ""
 
 
+def _gateway_from_route_print() -> str:
+    """Parse `route print` on Windows to find the default gateway.
+
+    This works regardless of Windows locale since the routing table
+    data format uses numeric IPs, not translated labels.
+    """
+    try:
+        result = subprocess.run(
+            ["route", "print", "0.0.0.0"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.split("\n"):
+                # Default route line: 0.0.0.0  0.0.0.0  <gateway>  <iface>  <metric>
+                match = re.match(
+                    r"\s*0\.0\.0\.0\s+0\.0\.0\.0\s+(\d+\.\d+\.\d+\.\d+)",
+                    line,
+                )
+                if match:
+                    gw = match.group(1)
+                    if gw != "0.0.0.0":
+                        return gw
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    return ""
+
+
 def _gateway_from_route_command() -> str:
-    """Try `ip route` or `route` commands as a fallback."""
+    """Try `ip route` or `route -n` as a fallback (Linux/macOS)."""
     for cmd in [["ip", "route", "show", "default"], ["route", "-n"]]:
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=5
             )
             if result.returncode == 0:
-                match = re.search(r"(?:default\s+via\s+|0\.0\.0\.0\s+)(\d+\.\d+\.\d+\.\d+)", result.stdout)
+                match = re.search(
+                    r"default\s+via\s+(\d+\.\d+\.\d+\.\d+)", result.stdout
+                )
                 if match:
                     return match.group(1)
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             continue
+    return ""
+
+
+def _gateway_from_local_ip() -> str:
+    """Last resort: derive likely gateway from local IP (assume x.x.x.1)."""
+    local_ip = _detect_local_ip()
+    if local_ip and local_ip != "127.0.0.1":
+        parts = local_ip.rsplit(".", 1)
+        if len(parts) == 2:
+            return f"{parts[0]}.1"
     return ""
 
 

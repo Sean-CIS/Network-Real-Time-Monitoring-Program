@@ -1,19 +1,19 @@
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QStatusBar,
     QTabWidget,
-    QWidget,
 )
 
 from src.gui.alerts_view import AlertsView
 from src.gui.bandwidth_view import BandwidthView
+from src.gui.connections_view import ConnectionsView
 from src.gui.dashboard import DashboardView
 from src.gui.devices_view import DevicesView
 from src.gui.latency_view import LatencyView
 from src.gui.packets_view import PacketsView
 from src.gui.ports_view import PortsView
+from src.gui.security_events_view import SecurityEventsView
 from src.utils.network import is_admin
 
 
@@ -61,6 +61,8 @@ class MainWindow(QMainWindow):
         self.devices_view = DevicesView()
         self.ports_view = PortsView()
         self.packets_view = PacketsView()
+        self.security_events_view = SecurityEventsView()
+        self.connections_view = ConnectionsView()
         self.alerts_view = AlertsView()
 
         # Add tabs
@@ -70,6 +72,8 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(self.devices_view, "Devices")
         self._tabs.addTab(self.ports_view, "Port Scanner")
         self._tabs.addTab(self.packets_view, "Packet Capture")
+        self._tabs.addTab(self.security_events_view, "Security Events")
+        self._tabs.addTab(self.connections_view, "Connections")
         self._tabs.addTab(self.alerts_view, "Alerts")
 
         self.setCentralWidget(self._tabs)
@@ -101,7 +105,6 @@ class MainWindow(QMainWindow):
         status_bar.addPermanentWidget(self._net_info_label)
 
     def set_network_status(self, gateway: str, subnet: str):
-        """Update the status bar with detected network info."""
         self._net_info_label.setText(
             f"Network: {subnet}  |  Gateway: {gateway}"
         )

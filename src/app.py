@@ -1,18 +1,23 @@
+import csv
+import json
 import sys
 
-from PySide6.QtCore import Slot
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QTimer, Slot
+from PySide6.QtWidgets import QApplication, QFileDialog
 
 from src.core.alerts import AlertEngine
 from src.core.bandwidth import BandwidthMonitor
+from src.core.connection_tracker import ConnectionTracker
 from src.core.discovery import DiscoveryWorker
 from src.core.latency import LatencyMonitor
 from src.core.packet_capture import PacketCaptureWorker
 from src.core.port_scanner import PortScanWorker
+from src.core.report_generator import generate_capture_report
 from src.gui.main_window import MainWindow
 from src.utils import db
 from src.utils.config import get, load_config
 from src.utils.network import detect_network_info
+from src.utils.vuln_hints import SECURITY_SCAN_PORTS
 
 
 class NetworkMonitorApp:
@@ -47,6 +52,9 @@ class NetworkMonitorApp:
         self._init_port_scanner()
         self._init_packet_capture()
         self._init_alerts()
+        self._init_connection_tracker()
+        self._init_security_events()
+        self._init_security_score_timer()
 
     # ── Bandwidth ──────────────────────────────────────────────
 
@@ -120,6 +128,9 @@ class NetworkMonitorApp:
         )
         self._window.devices_view.scan_button.clicked.connect(self._start_discovery)
 
+        # Connect trust device signal from device table
+        self._window.devices_view.device_table.trust_device.connect(self._trust_device)
+
     def _start_discovery(self):
         if not self._discovery_worker.isRunning():
             self._discovery_worker.set_network(self._discovery_network)
@@ -129,10 +140,26 @@ class NetworkMonitorApp:
     @Slot(list)
     def _on_discovery_complete(self, devices: list):
         all_devices = db.get_all_devices()
-        self._window.devices_view.update_devices(all_devices)
+
+        # Check for rogue devices and create security events
+        self._alert_engine.check_rogue_devices(all_devices)
+
+        # Get trusted MACs for UI highlighting
+        trusted_macs = db.get_trusted_macs()
+        self._window.devices_view.update_devices(all_devices, trusted_macs)
+
         self._alert_engine.check_devices(devices)
         online = sum(1 for d in all_devices if d.get("is_online"))
         self._window.dashboard_view.update_device_count(online)
+
+    @Slot(str)
+    def _trust_device(self, mac: str):
+        """Mark a device as trusted in the baseline database."""
+        db.mark_device_trusted(mac, trusted=True)
+        # Refresh device list to update highlighting
+        all_devices = db.get_all_devices()
+        trusted_macs = db.get_trusted_macs()
+        self._window.devices_view.update_devices(all_devices, trusted_macs)
 
     # ── Port Scanner ───────────────────────────────────────────
 
@@ -152,6 +179,11 @@ class NetworkMonitorApp:
             self._window.ports_view.set_target
         )
 
+        # Connect Quick Security Scan button
+        self._window.ports_view.quick_scan_clicked.connect(
+            self._start_quick_security_scan
+        )
+
     def _start_port_scan(self):
         if not self._port_worker.isRunning():
             target = self._window.ports_view.target_ip
@@ -160,6 +192,18 @@ class NetworkMonitorApp:
             )
             self._port_worker.set_target(target, ports)
             self._port_worker.start()
+
+    def _start_quick_security_scan(self):
+        """Run a security-focused scan on common exploit ports."""
+        if self._port_worker.isRunning():
+            return
+        gateway = self._network_info["gateway_ip"]
+        target = gateway or "127.0.0.1"
+        ports = ",".join(str(p) for p in SECURITY_SCAN_PORTS)
+        self._window.ports_view.set_target(target)
+        self._window.ports_view.set_status("Running quick security scan...")
+        self._port_worker.set_target(target, ports)
+        self._port_worker.start()
 
     @Slot(list)
     def _on_port_scan_complete(self, results: list):
@@ -174,8 +218,22 @@ class NetworkMonitorApp:
         self._capture_worker.capture_status.connect(
             lambda s: self._window.packets_view.set_capturing(s == "Capturing...")
         )
+
+        # Security events from packet analysis
+        self._capture_worker.security_event.connect(self._on_security_event)
+
         self._window.packets_view.start_button.clicked.connect(self._start_capture)
         self._window.packets_view.stop_button.clicked.connect(self._stop_capture)
+
+        # Export / report buttons
+        self._window.packets_view.export_pcap_clicked.connect(self._export_pcap)
+        self._window.packets_view.export_csv_clicked.connect(self._export_csv)
+        self._window.packets_view.generate_report_clicked.connect(self._generate_report)
+
+        # Top talkers timer (updates every 5 seconds during capture)
+        self._top_talkers_timer = QTimer()
+        self._top_talkers_timer.setInterval(5000)
+        self._top_talkers_timer.timeout.connect(self._update_top_talkers)
 
     def _start_capture(self):
         if not self._capture_worker.isRunning():
@@ -186,10 +244,196 @@ class NetworkMonitorApp:
             self._capture_worker.set_filter(bpf)
             self._capture_worker.start()
             self._window.packets_view.set_capturing(True)
+            self._top_talkers_timer.start()
 
     def _stop_capture(self):
         self._capture_worker.stop()
         self._window.packets_view.set_capturing(False)
+        self._top_talkers_timer.stop()
+        # Final top talkers update
+        self._update_top_talkers()
+
+    def _update_top_talkers(self):
+        if hasattr(self._capture_worker, "get_top_talkers"):
+            talkers = self._capture_worker.get_top_talkers()
+            self._window.packets_view.update_top_talkers(talkers)
+
+    # ── Export / Report ────────────────────────────────────────
+
+    def _export_pcap(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self._window, "Save PCAP", "capture.pcap", "PCAP Files (*.pcap)"
+        )
+        if not path:
+            return
+        try:
+            from scapy.all import wrpcap
+            raw = self._capture_worker.get_raw_packets()
+            if raw:
+                wrpcap(path, raw)
+        except Exception as e:
+            print(f"[Export PCAP Error] {e}")
+
+    def _export_csv(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self._window, "Save CSV", "packets.csv", "CSV Files (*.csv)"
+        )
+        if not path:
+            return
+        try:
+            packets = self._capture_worker.get_captured_packets()
+            if not packets:
+                return
+            fieldnames = [
+                "time", "src", "dst", "protocol", "length", "info",
+                "threat_level", "country_src", "country_dst",
+            ]
+            with open(path, "w", newline="") as f:
+                writer = csv.DictWriter(
+                    f, fieldnames=fieldnames, extrasaction="ignore"
+                )
+                writer.writeheader()
+                writer.writerows(packets)
+        except Exception as e:
+            print(f"[Export CSV Error] {e}")
+
+    def _generate_report(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self._window, "Save Report", "capture_report.html", "HTML Files (*.html)"
+        )
+        if not path:
+            return
+        try:
+            metadata = self._capture_worker.get_capture_metadata()
+            packets = self._capture_worker.get_captured_packets()
+            events = self._capture_worker.get_security_events()
+            top_talkers = self._capture_worker.get_top_talkers()
+
+            # GeoIP batch lookup for external IPs
+            geoip = self._capture_worker.get_geoip()
+            external_ips = set()
+            for p in packets:
+                for key in ("src", "dst"):
+                    ip = p.get(key, "")
+                    if ip and not geoip.is_private(ip):
+                        external_ips.add(ip)
+            geoip_data = geoip.lookup_batch(list(external_ips))
+
+            html = generate_capture_report(
+                metadata, packets, events, geoip_data, top_talkers
+            )
+            with open(path, "w") as f:
+                f.write(html)
+        except Exception as e:
+            print(f"[Report Error] {e}")
+
+    # ── Security Events ────────────────────────────────────────
+
+    def _init_security_events(self):
+        """Load existing security events from DB and wire clear button."""
+        events = db.get_recent_security_events(200)
+        self._window.security_events_view.update_events(events)
+        self._window.security_events_view.clear_button.clicked.connect(
+            self._clear_security_events
+        )
+
+    @Slot(dict)
+    def _on_security_event(self, event: dict):
+        """Handle a security event from the packet capture threat detector."""
+        db.insert_security_event(
+            severity=event.get("severity", "info"),
+            event_type=event.get("event_type", "unknown"),
+            description=event.get("description", ""),
+            source_ip=event.get("source_ip", ""),
+            dest_ip=event.get("dest_ip", ""),
+            raw_details=json.dumps(event.get("raw_details", {}))
+            if isinstance(event.get("raw_details"), dict) else
+            str(event.get("raw_details", "")),
+        )
+        self._window.security_events_view.add_event(event)
+
+    def _clear_security_events(self):
+        db.clear_security_events()
+        self._window.security_events_view.clear_events()
+
+    # ── Connection Tracker ─────────────────────────────────────
+
+    def _init_connection_tracker(self):
+        interval = get("security", "connection_poll_interval_s", 3)
+        self._conn_tracker = ConnectionTracker(interval_s=interval)
+        self._conn_tracker.data_ready.connect(
+            self._window.connections_view.update_connections
+        )
+        self._conn_tracker.error_occurred.connect(self._on_error)
+        self._conn_tracker.start()
+
+    # ── Security Score ─────────────────────────────────────────
+
+    def _init_security_score_timer(self):
+        """Periodically recalculate the dashboard security score."""
+        self._security_score_timer = QTimer()
+        self._security_score_timer.setInterval(10_000)
+        self._security_score_timer.timeout.connect(self._update_security_score)
+        self._security_score_timer.start()
+        # Initial update
+        self._update_security_score()
+
+    def _update_security_score(self):
+        """Calculate security score (0-100) based on recent events and state."""
+        score = 100
+
+        # Deduct for critical and warning security events in last 24h
+        counts = db.get_security_event_counts_24h()
+        critical_24h = counts.get("critical", 0)
+        warning_24h = counts.get("warning", 0)
+        score -= min(30, critical_24h * 3)
+        score -= min(20, warning_24h * 1)
+
+        # Deduct for rogue (untrusted) devices
+        trusted = db.get_trusted_macs()
+        from src.utils.db import get_baseline_devices
+        baseline = get_baseline_devices()
+        rogue_count = sum(
+            1 for d in baseline if d["mac"] not in trusted
+        )
+        score -= min(20, rogue_count * 5)
+
+        score = max(0, score)
+        self._window.dashboard_view.update_security_score(score)
+
+        # Update 24h timeline
+        self._update_security_timeline()
+
+    def _update_security_timeline(self):
+        """Fetch hourly event counts for the last 24 hours and update dashboard."""
+        from datetime import datetime, timedelta
+
+        now = datetime.now()
+        # Build hourly buckets for last 24 hours
+        hourly_data = []
+        all_events = db.get_recent_security_events(1000)
+
+        for i in range(24):
+            hour_start = now - timedelta(hours=23 - i)
+            hour_end = now - timedelta(hours=22 - i) if i < 23 else now
+            bucket = {"hour": hour_start.hour, "critical": 0, "warning": 0, "info": 0}
+
+            for ev in all_events:
+                ts_str = ev.get("timestamp", "")
+                if not ts_str:
+                    continue
+                try:
+                    ts = datetime.fromisoformat(ts_str)
+                except (ValueError, TypeError):
+                    continue
+                if hour_start <= ts < hour_end:
+                    sev = ev.get("severity", "info")
+                    if sev in bucket:
+                        bucket[sev] += 1
+
+            hourly_data.append(bucket)
+
+        self._window.dashboard_view.update_security_timeline(hourly_data)
 
     # ── Alerts ─────────────────────────────────────────────────
 
@@ -243,3 +487,9 @@ class NetworkMonitorApp:
             self._latency_monitor.stop()
         if hasattr(self, "_capture_worker") and self._capture_worker.isRunning():
             self._capture_worker.stop()
+        if hasattr(self, "_conn_tracker"):
+            self._conn_tracker.stop()
+        if hasattr(self, "_top_talkers_timer"):
+            self._top_talkers_timer.stop()
+        if hasattr(self, "_security_score_timer"):
+            self._security_score_timer.stop()

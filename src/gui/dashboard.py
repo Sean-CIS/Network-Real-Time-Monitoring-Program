@@ -1,3 +1,5 @@
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -13,6 +15,63 @@ from src.gui.widgets.stat_card import StatCard
 _MB_THRESHOLD = 1_000_000
 
 
+class SecurityTimeline(QWidget):
+    """Mini bar chart showing security events per hour over the last 24 hours."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumHeight(60)
+        self.setMaximumHeight(80)
+        self._hourly_data: list[dict] = []  # [{hour, critical, warning, info}]
+
+    def set_data(self, hourly: list[dict]):
+        self._hourly_data = hourly
+        self.update()
+
+    def paintEvent(self, event):
+        if not self._hourly_data:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        w = self.width()
+        h = self.height()
+        bar_w = max(2, (w - 48) // 24)
+        max_count = max(
+            (d.get("critical", 0) + d.get("warning", 0) + d.get("info", 0))
+            for d in self._hourly_data
+        ) or 1
+
+        x_offset = 24
+        for i, d in enumerate(self._hourly_data):
+            total = d.get("critical", 0) + d.get("warning", 0) + d.get("info", 0)
+            bar_h = max(1, int((total / max_count) * (h - 20))) if total > 0 else 0
+
+            if d.get("critical", 0) > 0:
+                color = QColor("#f38ba8")
+            elif d.get("warning", 0) > 0:
+                color = QColor("#f9e2af")
+            else:
+                color = QColor("#94e2d5")
+
+            painter.fillRect(
+                x_offset + i * bar_w, h - 15 - bar_h,
+                bar_w - 1, bar_h,
+                color,
+            )
+
+        # Draw hour labels every 6 hours
+        painter.setPen(QColor("#a6adc8"))
+        for i, d in enumerate(self._hourly_data):
+            hr = d.get("hour", i)
+            if hr % 6 == 0:
+                painter.drawText(
+                    x_offset + i * bar_w - 5, h - 2,
+                    f"{hr:02d}"
+                )
+        painter.end()
+
+
 class DashboardView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -20,7 +79,9 @@ class DashboardView(QWidget):
 
         # Title
         title = QLabel("Network Monitor Dashboard")
-        title.setStyleSheet("color: #cdd6f4; font-size: 18px; font-weight: bold; padding: 8px;")
+        title.setStyleSheet(
+            "color: #cdd6f4; font-size: 18px; font-weight: bold; padding: 8px;"
+        )
         layout.addWidget(title)
 
         # Network info row
@@ -32,6 +93,7 @@ class DashboardView(QWidget):
         self._card_latency = StatCard("Avg Latency", "—")
         self._card_devices = StatCard("Devices Online", "0")
         self._card_alerts = StatCard("Active Alerts", "0")
+        self._card_security_score = StatCard("Security Score", "—")
         net_cards_layout.addWidget(self._card_local_ip)
         net_cards_layout.addWidget(self._card_subnet)
         net_cards_layout.addWidget(self._card_download)
@@ -39,6 +101,7 @@ class DashboardView(QWidget):
         net_cards_layout.addWidget(self._card_latency)
         net_cards_layout.addWidget(self._card_devices)
         net_cards_layout.addWidget(self._card_alerts)
+        net_cards_layout.addWidget(self._card_security_score)
         layout.addLayout(net_cards_layout)
 
         # Charts row
@@ -61,10 +124,18 @@ class DashboardView(QWidget):
         charts_layout.addWidget(self._latency_chart)
         layout.addLayout(charts_layout, stretch=1)
 
+        # Security timeline
+        timeline_label = QLabel("Last 24h Security Events")
+        timeline_label.setStyleSheet(
+            "color: #cdd6f4; font-size: 13px; font-weight: bold; padding: 4px 0 0 0;"
+        )
+        layout.addWidget(timeline_label)
+        self._security_timeline = SecurityTimeline()
+        layout.addWidget(self._security_timeline)
+
         self._use_mb = False
 
     def update_network_info(self, local_ip: str, subnet: str):
-        """Set the detected network info cards."""
         self._card_local_ip.set_value(local_ip)
         self._card_subnet.set_value(subnet)
 
@@ -83,7 +154,6 @@ class DashboardView(QWidget):
         else:
             self._card_upload.set_value(f"{speed_up:.0f} B/s")
 
-        # Auto-scale chart between KB/s and MB/s
         peak = max(speed_down, speed_up)
         if peak >= _MB_THRESHOLD and not self._use_mb:
             self._use_mb = True
@@ -110,3 +180,22 @@ class DashboardView(QWidget):
 
     def update_alert_count(self, count: int):
         self._card_alerts.set_value(str(count))
+
+    def update_security_score(self, score: int):
+        self._card_security_score.set_value(str(score))
+        if score >= 80:
+            color = "#a6e3a1"  # green
+        elif score >= 50:
+            color = "#f9e2af"  # yellow
+        else:
+            color = "#f38ba8"  # red
+        # Update the value label color in the StatCard
+        for child in self._card_security_score.findChildren(QLabel):
+            if child.text() == str(score):
+                child.setStyleSheet(
+                    f"color: {color}; font-size: 20px; font-weight: bold;"
+                )
+                break
+
+    def update_security_timeline(self, hourly_data: list[dict]):
+        self._security_timeline.set_data(hourly_data)

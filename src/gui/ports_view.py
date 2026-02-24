@@ -1,3 +1,5 @@
+from PySide6.QtCore import Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
@@ -10,8 +12,18 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.utils.vuln_hints import PORT_HINTS
+
+_HINT_COLORS = {
+    "critical": QColor("#f38ba8"),
+    "warning": QColor("#f9e2af"),
+    "info": QColor("#94e2d5"),
+}
+
 
 class PortsView(QWidget):
+    quick_scan_clicked = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
@@ -38,15 +50,24 @@ class PortsView(QWidget):
         )
         input_layout.addWidget(self._scan_btn)
 
+        self._quick_scan_btn = QPushButton("Quick Security Scan")
+        self._quick_scan_btn.setStyleSheet(
+            "QPushButton { background-color: #fab387; color: #1e1e2e; "
+            "padding: 8px 16px; border-radius: 4px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #f9e2af; }"
+        )
+        self._quick_scan_btn.clicked.connect(self.quick_scan_clicked.emit)
+        input_layout.addWidget(self._quick_scan_btn)
+
         self._status_label = QLabel("Ready")
         self._status_label.setStyleSheet("color: #a6adc8;")
         input_layout.addWidget(self._status_label)
         input_layout.addStretch()
         layout.addLayout(input_layout)
 
-        # Results table
+        # Results table with Security column
         self._table = QTableWidget()
-        columns = ["Port", "Protocol", "State", "Service", "Version"]
+        columns = ["Port", "Protocol", "State", "Service", "Version", "Security"]
         self._table.setColumnCount(len(columns))
         self._table.setHorizontalHeaderLabels(columns)
         self._table.setSortingEnabled(True)
@@ -56,10 +77,8 @@ class PortsView(QWidget):
         self._table.setStyleSheet(
             """
             QTableWidget {
-                background-color: #1e1e2e;
-                color: #cdd6f4;
-                gridline-color: #45475a;
-                border: none;
+                background-color: #1e1e2e; color: #cdd6f4;
+                gridline-color: #45475a; border: none;
             }
             QTableWidget::item:selected { background-color: #45475a; }
             QHeaderView::section {
@@ -74,6 +93,10 @@ class PortsView(QWidget):
     @property
     def scan_button(self) -> QPushButton:
         return self._scan_btn
+
+    @property
+    def quick_scan_button(self) -> QPushButton:
+        return self._quick_scan_btn
 
     @property
     def target_ip(self) -> str:
@@ -93,11 +116,23 @@ class PortsView(QWidget):
         self._table.setSortingEnabled(False)
         self._table.setRowCount(len(ports))
         for row, p in enumerate(ports):
-            self._table.setItem(row, 0, QTableWidgetItem(str(p.get("port", ""))))
+            port_num = p.get("port", 0)
+            self._table.setItem(row, 0, QTableWidgetItem(str(port_num)))
             self._table.setItem(row, 1, QTableWidgetItem(p.get("protocol", "tcp")))
             state = p.get("state", "")
-            state_item = QTableWidgetItem(state)
-            self._table.setItem(row, 2, state_item)
+            self._table.setItem(row, 2, QTableWidgetItem(state))
             self._table.setItem(row, 3, QTableWidgetItem(p.get("service", "")))
             self._table.setItem(row, 4, QTableWidgetItem(p.get("version", "")))
+
+            # Vulnerability hint
+            hint_info = PORT_HINTS.get(port_num)
+            if hint_info and state == "open":
+                hint_item = QTableWidgetItem(hint_info["hint"])
+                color = _HINT_COLORS.get(hint_info["severity"])
+                if color:
+                    hint_item.setForeground(color)
+                self._table.setItem(row, 5, hint_item)
+            else:
+                self._table.setItem(row, 5, QTableWidgetItem(""))
+
         self._table.setSortingEnabled(True)

@@ -75,9 +75,36 @@ def init_db():
             version TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS security_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            source_ip TEXT,
+            dest_ip TEXT,
+            description TEXT,
+            raw_details TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS geoip_cache (
+            ip TEXT PRIMARY KEY,
+            country_code TEXT,
+            country_name TEXT,
+            city TEXT,
+            looked_up_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS device_baseline (
+            mac TEXT PRIMARY KEY,
+            ip TEXT,
+            first_seen TEXT,
+            is_trusted INTEGER DEFAULT 0
+        );
+
         CREATE INDEX IF NOT EXISTS idx_bandwidth_ts ON bandwidth_history(timestamp);
         CREATE INDEX IF NOT EXISTS idx_latency_ts ON latency_history(timestamp);
         CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_secevt_ts ON security_events(timestamp);
     """
     )
     conn.commit()
@@ -151,3 +178,131 @@ def clear_alerts():
     conn = get_connection()
     conn.execute("DELETE FROM alerts")
     conn.commit()
+
+
+# ── Security Events ─────────────────────────────────────────
+
+
+def insert_security_event(severity: str, event_type: str, description: str,
+                          source_ip: str = "", dest_ip: str = "",
+                          raw_details: str = ""):
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO security_events (timestamp, severity, event_type, source_ip, "
+        "dest_ip, description, raw_details) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (datetime.now().isoformat(), severity, event_type, source_ip, dest_ip,
+         description, raw_details),
+    )
+    conn.commit()
+
+
+def get_recent_security_events(limit: int = 200) -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM security_events ORDER BY timestamp DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def clear_security_events():
+    conn = get_connection()
+    conn.execute("DELETE FROM security_events")
+    conn.commit()
+
+
+def get_security_event_counts_24h() -> dict:
+    """Get security event counts grouped by hour for the last 24 hours."""
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT strftime('%H', timestamp) as hour,
+                  severity,
+                  COUNT(*) as cnt
+           FROM security_events
+           WHERE timestamp >= datetime('now', '-24 hours')
+           GROUP BY hour, severity
+           ORDER BY hour"""
+    ).fetchall()
+    # Build hourly dict
+    hourly: dict[str, dict] = {}
+    for r in rows:
+        h = r["hour"]
+        if h not in hourly:
+            hourly[h] = {"hour": int(h), "critical": 0, "warning": 0, "info": 0}
+        sev = r["severity"]
+        if sev in hourly[h]:
+            hourly[h][sev] = r["cnt"]
+    return hourly
+
+
+def get_security_event_total_counts() -> dict:
+    """Get total security event counts by severity."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT severity, COUNT(*) as cnt FROM security_events GROUP BY severity"
+    ).fetchall()
+    result = {"critical": 0, "warning": 0, "info": 0}
+    for r in rows:
+        if r["severity"] in result:
+            result[r["severity"]] = r["cnt"]
+    return result
+
+
+# ── GeoIP Cache ─────────────────────────────────────────────
+
+
+def upsert_geoip_cache(ip: str, country_code: str, country_name: str, city: str):
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO geoip_cache (ip, country_code, country_name, city, looked_up_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(ip) DO UPDATE SET
+             country_code = excluded.country_code,
+             country_name = excluded.country_name,
+             city = excluded.city,
+             looked_up_at = excluded.looked_up_at""",
+        (ip, country_code, country_name, city, datetime.now().isoformat()),
+    )
+    conn.commit()
+
+
+def get_geoip_cache(ip: str) -> Optional[dict]:
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM geoip_cache WHERE ip = ?", (ip,)).fetchone()
+    return dict(row) if row else None
+
+
+# ── Device Baseline ─────────────────────────────────────────
+
+
+def get_baseline_devices() -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute("SELECT * FROM device_baseline").fetchall()
+    return [dict(r) for r in rows]
+
+
+def upsert_baseline_device(mac: str, ip: str = ""):
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO device_baseline (mac, ip, first_seen, is_trusted)
+           VALUES (?, ?, ?, 0)
+           ON CONFLICT(mac) DO UPDATE SET ip = COALESCE(NULLIF(excluded.ip, ''), device_baseline.ip)""",
+        (mac, ip, datetime.now().isoformat()),
+    )
+    conn.commit()
+
+
+def mark_device_trusted(mac: str, trusted: bool = True):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE device_baseline SET is_trusted = ? WHERE mac = ?",
+        (int(trusted), mac),
+    )
+    conn.commit()
+
+
+def get_trusted_macs() -> set[str]:
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT mac FROM device_baseline WHERE is_trusted = 1"
+    ).fetchall()
+    return {r["mac"] for r in rows}

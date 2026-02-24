@@ -1,3 +1,4 @@
+import statistics
 import time
 from datetime import datetime
 
@@ -21,6 +22,10 @@ class AlertEngine(QObject):
         self._active_conditions: set[str] = set()
         self._known_devices: set[str] = set()
 
+        # Bandwidth anomaly detection
+        self._bandwidth_history: list[float] = []
+        self._bw_window_size = 60
+
     def configure(self, bandwidth_mbps: float = 100.0, latency_ms: float = 200.0,
                   offline_timeout_s: float = 60.0, cooldown_s: float = 300.0):
         self._bandwidth_threshold_mbps = bandwidth_mbps
@@ -34,7 +39,7 @@ class AlertEngine(QObject):
         self._active_conditions.clear()
 
     def check_bandwidth(self, data: dict):
-        """Check bandwidth data for threshold violations."""
+        """Check bandwidth data for threshold violations and anomalies."""
         for iface, stats in data.items():
             speed_down_mbps = stats.get("speed_down", 0) / 1_000_000 * 8
             speed_up_mbps = stats.get("speed_up", 0) / 1_000_000 * 8
@@ -65,6 +70,34 @@ class AlertEngine(QObject):
             else:
                 self._active_conditions.discard(up_key)
 
+        # Bandwidth anomaly detection (statistical)
+        total_bps = sum(
+            v.get("speed_down", 0) + v.get("speed_up", 0) for v in data.values()
+        )
+        self._bandwidth_history.append(total_bps)
+        if len(self._bandwidth_history) > self._bw_window_size:
+            self._bandwidth_history.pop(0)
+
+        anomaly_key = "bandwidth_anomaly:global"
+        if len(self._bandwidth_history) >= 30:
+            baseline = self._bandwidth_history[:-1]
+            mean = statistics.mean(baseline)
+            stdev = statistics.stdev(baseline) if len(baseline) > 1 else 0
+            if stdev > 0 and total_bps > mean + 3 * stdev:
+                self._emit_alert(
+                    alert_type="bandwidth_anomaly",
+                    severity="warning",
+                    message=(
+                        f"Bandwidth anomaly: {total_bps / 1_000_000:.1f} MB/s "
+                        f"(baseline: {mean / 1_000_000:.1f} +/- "
+                        f"{stdev / 1_000_000:.1f} MB/s)"
+                    ),
+                    source="bandwidth",
+                    condition_key=anomaly_key,
+                )
+            else:
+                self._active_conditions.discard(anomaly_key)
+
     def check_latency(self, results: list[dict]):
         """Check latency results for threshold violations."""
         for r in results:
@@ -76,7 +109,6 @@ class AlertEngine(QObject):
             high_key = f"latency_high:{host}:high"
 
             if not r.get("is_alive"):
-                # Host is down — clear the "high latency" condition if it was set
                 self._active_conditions.discard(high_key)
                 self._emit_alert(
                     alert_type="latency_high",
@@ -86,7 +118,6 @@ class AlertEngine(QObject):
                     condition_key=unreachable_key,
                 )
             elif latency and latency > self._latency_threshold_ms:
-                # Host is alive but latency is high — clear unreachable condition
                 self._active_conditions.discard(unreachable_key)
                 self._emit_alert(
                     alert_type="latency_high",
@@ -97,7 +128,6 @@ class AlertEngine(QObject):
                     condition_key=high_key,
                 )
             else:
-                # Host is alive and latency is fine — clear both conditions
                 self._active_conditions.discard(unreachable_key)
                 self._active_conditions.discard(high_key)
 
@@ -117,6 +147,30 @@ class AlertEngine(QObject):
             )
 
         self._known_devices = current_ips
+
+    def check_rogue_devices(self, devices: list[dict]):
+        """Compare current devices against baseline. Flag new MACs as rogue."""
+        baseline = db.get_baseline_devices()
+        baseline_macs = {d["mac"] for d in baseline}
+
+        for dev in devices:
+            mac = dev.get("mac", "")
+            if not mac:
+                continue
+            if mac not in baseline_macs:
+                db.upsert_baseline_device(mac, dev.get("ip", ""))
+                db.insert_security_event(
+                    severity="warning",
+                    event_type="rogue_device",
+                    source_ip=dev.get("ip", ""),
+                    description=(
+                        f"New device on network: {dev.get('ip', '?')} "
+                        f"MAC: {mac} Vendor: {dev.get('vendor', 'Unknown')}"
+                    ),
+                )
+            else:
+                # Update IP for existing baseline entry
+                db.upsert_baseline_device(mac, dev.get("ip", ""))
 
     def _emit_alert(self, alert_type: str, severity: str, message: str,
                     source: str = "", condition_key: str = ""):

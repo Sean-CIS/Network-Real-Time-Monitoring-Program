@@ -41,7 +41,8 @@ class PortScanWorker(QThread):
         import nmap
 
         scanner = nmap.PortScanner()
-        scanner.scan(self._target, self._ports, arguments="-sV")
+        scanner.scan(self._target, self._ports,
+                     arguments="-sV --host-timeout 30s")
 
         results = []
         for host in scanner.all_hosts():

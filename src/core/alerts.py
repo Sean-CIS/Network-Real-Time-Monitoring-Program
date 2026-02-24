@@ -79,11 +79,11 @@ class AlertEngine(QObject):
             self._bandwidth_history.pop(0)
 
         anomaly_key = "bandwidth_anomaly:global"
-        if len(self._bandwidth_history) >= 30:
+        if len(self._bandwidth_history) >= 60:
             baseline = self._bandwidth_history[:-1]
             mean = statistics.mean(baseline)
             stdev = statistics.stdev(baseline) if len(baseline) > 1 else 0
-            if stdev > 0 and total_bps > mean + 3 * stdev:
+            if stdev > 1000 and mean > 10000 and total_bps > mean + 3 * stdev:
                 self._emit_alert(
                     alert_type="bandwidth_anomaly",
                     severity="warning",

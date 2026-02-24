@@ -24,6 +24,7 @@ class LiveChart(QWidget):
         self._plot_widget.setTitle(title, color="#cdd6f4", size="12pt")
         self._plot_widget.setLabel("left", y_label, color="#cdd6f4")
         self._plot_widget.setLabel("bottom", "Time (s)", color="#cdd6f4")
+        self._plot_widget.setLimits(yMin=0)
 
         colors = ["#89b4fa", "#a6e3a1", "#f9e2af", "#f38ba8", "#cba6f7", "#94e2d5"]
         self._lines: list[pg.PlotDataItem] = []

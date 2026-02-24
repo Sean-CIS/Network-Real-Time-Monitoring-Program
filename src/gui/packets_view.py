@@ -105,12 +105,16 @@ class PacketsView(QWidget):
         cards_layout.addStretch()
         layout.addLayout(cards_layout)
 
-        # Top Talkers table (compact)
-        talkers_label = QLabel("Top Talkers")
-        talkers_label.setStyleSheet(
-            "color: #cdd6f4; font-size: 13px; font-weight: bold; padding: 4px;"
+        # Top Talkers collapsible section (collapsed by default)
+        self._talkers_header = QPushButton("\u25b6 Top Talkers")
+        self._talkers_header.setStyleSheet(
+            "QPushButton { color: #cdd6f4; font-size: 13px; font-weight: bold; "
+            "background: transparent; border: none; text-align: left; padding: 4px; }"
+            "QPushButton:hover { color: #89b4fa; }"
         )
-        layout.addWidget(talkers_label)
+        self._talkers_header.setCursor(self._talkers_header.cursor())
+        self._talkers_header.clicked.connect(self._toggle_talkers)
+        layout.addWidget(self._talkers_header)
 
         self._talkers_table = QTableWidget()
         talker_cols = ["#", "IP", "Country", "Pkts Sent", "Pkts Recv", "Bytes Total"]
@@ -131,9 +135,10 @@ class PacketsView(QWidget):
             }
             """
         )
+        self._talkers_table.setVisible(False)  # collapsed by default
         layout.addWidget(self._talkers_table)
 
-        # Protocol distribution chart
+        # Protocol distribution chart (compact height)
         self._proto_chart = LiveChart(
             title="Packets per Second by Protocol",
             y_label="Packets/s",
@@ -141,6 +146,7 @@ class PacketsView(QWidget):
             line_labels=["TCP", "UDP", "Other"],
             max_points=120,
         )
+        self._proto_chart.setMaximumHeight(180)
         layout.addWidget(self._proto_chart)
 
         # Packet table with security columns
@@ -186,6 +192,13 @@ class PacketsView(QWidget):
     @property
     def filter_text(self) -> str:
         return self._filter_input.text().strip()
+
+    def _toggle_talkers(self):
+        visible = not self._talkers_table.isVisible()
+        self._talkers_table.setVisible(visible)
+        self._talkers_header.setText(
+            "\u25bc Top Talkers" if visible else "\u25b6 Top Talkers"
+        )
 
     def update_top_talkers(self, talkers: list[dict]):
         """Update the top talkers table."""

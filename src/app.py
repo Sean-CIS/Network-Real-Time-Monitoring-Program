@@ -190,6 +190,11 @@ class NetworkMonitorApp:
             ports = self._window.ports_view.port_range or get(
                 "port_scanner", "default_ports", "1-1024"
             )
+            self._window.ports_view.scan_button.setEnabled(False)
+            self._window.ports_view.quick_scan_button.setEnabled(False)
+            self._capture_worker._threat_detector.set_scan_active(
+                True, self._network_info["local_ip"]
+            )
             self._port_worker.set_target(target, ports)
             self._port_worker.start()
 
@@ -202,12 +207,20 @@ class NetworkMonitorApp:
         ports = ",".join(str(p) for p in SECURITY_SCAN_PORTS)
         self._window.ports_view.set_target(target)
         self._window.ports_view.set_status("Running quick security scan...")
+        self._window.ports_view.scan_button.setEnabled(False)
+        self._window.ports_view.quick_scan_button.setEnabled(False)
+        self._capture_worker._threat_detector.set_scan_active(
+            True, self._network_info["local_ip"]
+        )
         self._port_worker.set_target(target, ports)
         self._port_worker.start()
 
     @Slot(list)
     def _on_port_scan_complete(self, results: list):
         self._window.ports_view.update_results(results)
+        self._window.ports_view.scan_button.setEnabled(True)
+        self._window.ports_view.quick_scan_button.setEnabled(True)
+        self._capture_worker._threat_detector.set_scan_active(False)
 
     # ── Packet Capture ─────────────────────────────────────────
 
@@ -256,6 +269,15 @@ class NetworkMonitorApp:
     def _update_top_talkers(self):
         if hasattr(self._capture_worker, "get_top_talkers"):
             talkers = self._capture_worker.get_top_talkers()
+            geoip = self._capture_worker.get_geoip()
+            for t in talkers:
+                ip = t.get("ip", "")
+                if geoip.is_private(ip):
+                    t["country"] = "Local"
+                else:
+                    geo = geoip.lookup(ip)
+                    cc = geo.get("country_code", "")
+                    t["country"] = cc if cc and cc != "?" else "Unknown"
             self._window.packets_view.update_top_talkers(talkers)
 
     # ── Export / Report ────────────────────────────────────────

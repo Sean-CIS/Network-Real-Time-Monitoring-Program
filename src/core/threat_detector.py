@@ -22,11 +22,10 @@ SUSPICIOUS_PORTS = {
 }
 
 # Expected protocols on well-known ports
+# Note: 443 omitted (UDP/QUIC is legitimate), 53 omitted (uses both TCP and UDP)
 _EXPECTED_PROTOCOLS = {
     80: "TCP",
-    443: "TCP",
     22: "TCP",
-    53: "UDP",
     21: "TCP",
     25: "TCP",
     23: "TCP",
@@ -92,6 +91,15 @@ class ThreatDetector:
         # Security events from current session
         self._security_events: list[dict] = []
 
+        # Self-scan suppression: skip port_scan/syn_flood from local IP during user scans
+        self._scan_active: bool = False
+        self._scan_source_ip: str = ""
+
+    def set_scan_active(self, active: bool, source_ip: str = ""):
+        """Suppress port_scan/syn_flood alerts from source_ip while a user scan is running."""
+        self._scan_active = active
+        self._scan_source_ip = source_ip
+
     def analyze_packet(self, pkt_dict: dict, raw_pkt=None) -> list[dict]:
         """Analyze a packet and return any security events detected.
 
@@ -121,13 +129,19 @@ class ThreatDetector:
             self._traffic_stats[dst]["bytes_recv"] += length
             self._traffic_stats[dst]["packets_recv"] += 1
 
+        # Suppress port_scan/syn_flood from local IP during user-initiated scans
+        _skip_scan_checks = (self._scan_active
+                             and src == self._scan_source_ip)
+
         # Port scan detection (TCP SYN to multiple ports)
         if protocol == "TCP" and dst_port and src and "S" in flags:
-            events.extend(self._check_port_scan(src, dst, dst_port, now))
+            if not _skip_scan_checks:
+                events.extend(self._check_port_scan(src, dst, dst_port, now))
 
         # SYN flood detection
         if protocol == "TCP" and src and flags == "S":
-            events.extend(self._check_syn_flood(src, dst, now))
+            if not _skip_scan_checks:
+                events.extend(self._check_syn_flood(src, dst, now))
 
         # ARP spoof detection
         if raw_pkt is not None:
@@ -259,30 +273,37 @@ class ThreatDetector:
                 "raw_details": json.dumps({"domain": qname, "size": pkt_len}),
             })
 
-        # DNS tunneling: high frequency queries to same domain
-        base_domain = _extract_base_domain(qname)
-        tracker = self._dns_query_tracker[base_domain]
-        tracker[:] = [t for t in tracker if now - t < _DNS_FREQ_WINDOW_S]
-        tracker.append(now)
+        # Skip frequency, DGA, and NXDOMAIN checks for reverse DNS lookups
+        # (e.g. 171.50.168.192.in-addr.arpa, *.ip6.arpa)
+        _is_reverse_dns = (qname.endswith(".in-addr.arpa")
+                           or qname.endswith(".ip6.arpa"))
 
-        if (len(tracker) > _DNS_FREQ_THRESHOLD
-                and base_domain not in self._dns_tunnel_alerted):
-            self._dns_tunnel_alerted.add(base_domain)
-            events.append({
-                "timestamp": datetime.now().isoformat(),
-                "severity": "warning",
-                "event_type": "dns_tunnel",
-                "source_ip": src,
-                "dest_ip": dst,
-                "description": (
-                    f"High-frequency DNS queries to {base_domain}: "
-                    f"{len(tracker)} queries in {_DNS_FREQ_WINDOW_S:.0f}s"
-                ),
-                "raw_details": json.dumps({"domain": base_domain, "count": len(tracker)}),
-            })
+        # DNS tunneling: high frequency queries to same domain
+        if not _is_reverse_dns:
+            base_domain = _extract_base_domain(qname)
+            tracker = self._dns_query_tracker[base_domain]
+            tracker[:] = [t for t in tracker if now - t < _DNS_FREQ_WINDOW_S]
+            tracker.append(now)
+
+            if (len(tracker) > _DNS_FREQ_THRESHOLD
+                    and base_domain not in self._dns_tunnel_alerted):
+                self._dns_tunnel_alerted.add(base_domain)
+                events.append({
+                    "timestamp": datetime.now().isoformat(),
+                    "severity": "warning",
+                    "event_type": "dns_tunnel",
+                    "source_ip": src,
+                    "dest_ip": dst,
+                    "description": (
+                        f"High-frequency DNS queries to {base_domain}: "
+                        f"{len(tracker)} queries in {_DNS_FREQ_WINDOW_S:.0f}s"
+                    ),
+                    "raw_details": json.dumps({"domain": base_domain, "count": len(tracker)}),
+                })
 
         # DGA detection: high entropy domain names
-        if (len(qname) > _DGA_LENGTH_THRESHOLD
+        if (not _is_reverse_dns
+                and len(qname) > _DGA_LENGTH_THRESHOLD
                 and _shannon_entropy(qname) > _DGA_ENTROPY_THRESHOLD
                 and qname not in self._dga_alerted):
             self._dga_alerted.add(qname)

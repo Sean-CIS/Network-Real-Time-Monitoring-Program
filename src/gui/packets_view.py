@@ -1,5 +1,5 @@
 from PySide6.QtCore import Signal
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
@@ -14,68 +14,13 @@ from PySide6.QtWidgets import (
 
 from src.gui import theme
 from src.gui.widgets.live_chart import LiveChart
+from src.gui.widgets.ring_chart import RingChart
 from src.gui.widgets.stat_card import StatCard
 
 _THREAT_COLORS = {
     "critical": QColor(255, 51, 51, 30),
     "warning": QColor(255, 176, 0, 30),
 }
-
-
-class ProtocolPieChart(QWidget):
-    """Simple pie chart showing protocol distribution."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setMinimumHeight(120)
-        self.setMaximumHeight(150)
-        self._data: dict[str, int] = {}
-
-    def set_data(self, data: dict[str, int]):
-        self._data = data
-        self.update()
-
-    def paintEvent(self, event):
-        if not self._data:
-            return
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-
-        total = sum(self._data.values())
-        if total == 0:
-            painter.end()
-            return
-
-        # Draw pie
-        h = self.height()
-        pie_size = min(h - 10, 130)
-        x = 10
-        y = (h - pie_size) // 2
-
-        start_angle = 0
-        sorted_items = sorted(self._data.items(), key=lambda x: x[1], reverse=True)
-        for i, (proto, count) in enumerate(sorted_items[:10]):
-            span_angle = int(count / total * 5760)  # Qt uses 1/16th degrees
-            color = theme.PIE_COLORS[i % len(theme.PIE_COLORS)]
-            painter.setBrush(color)
-            painter.setPen(QColor(theme.BG_SURFACE))
-            painter.drawPie(x, y, pie_size, pie_size, start_angle, span_angle)
-            start_angle += span_angle
-
-        # Draw legend
-        legend_x = x + pie_size + 15
-        legend_y = 10
-        painter.setPen(QColor(theme.GREEN))
-        for i, (proto, count) in enumerate(sorted_items[:8]):
-            color = theme.PIE_COLORS[i % len(theme.PIE_COLORS)]
-            pct = count / total * 100
-            painter.fillRect(legend_x, legend_y + i * 17, 12, 12, color)
-            painter.drawText(
-                legend_x + 16, legend_y + i * 17 + 11,
-                f"{proto}: {count} ({pct:.0f}%)"
-            )
-
-        painter.end()
 
 
 class PacketsView(QWidget):
@@ -177,7 +122,7 @@ class PacketsView(QWidget):
         self._proto_dist_header.clicked.connect(self._toggle_proto_dist)
         layout.addWidget(self._proto_dist_header)
 
-        self._proto_pie = ProtocolPieChart()
+        self._proto_pie = RingChart(title="Protocol Distribution")
         self._proto_pie.setVisible(False)
         layout.addWidget(self._proto_pie)
 

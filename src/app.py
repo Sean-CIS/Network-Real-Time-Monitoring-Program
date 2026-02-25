@@ -60,6 +60,7 @@ class NetworkMonitorApp:
         self._init_baseline()
         self._init_arp_monitor()
         self._init_dns_view()
+        self._init_world_map_timer()
 
     # ── Bandwidth ──────────────────────────────────────────────
 
@@ -80,6 +81,11 @@ class NetworkMonitorApp:
         total_down = sum(v.get("speed_down", 0) for v in data.values())
         total_up = sum(v.get("speed_up", 0) for v in data.values())
         self._window.dashboard_view.update_bandwidth_summary(total_down, total_up)
+
+        # Update bandwidth gauge (estimate utilization as % of 1 Gbps)
+        total_bps = (total_down + total_up) * 8  # bytes/s to bits/s
+        utilization_pct = min(100.0, total_bps / 1_000_000_000 * 100)
+        self._window.dashboard_view.update_gauge_bandwidth(utilization_pct)
 
         # Feed baseline
         if hasattr(self, "_baseline"):
@@ -164,6 +170,12 @@ class NetworkMonitorApp:
         self._alert_engine.check_devices(devices)
         online = sum(1 for d in all_devices if d.get("is_online"))
         self._window.dashboard_view.update_device_count(online)
+
+        # Update topology map on dashboard
+        gateway_ip = self._network_info.get("gateway_ip", "")
+        self._window.dashboard_view.update_topology(
+            all_devices, gateway_ip, trusted_macs
+        )
 
     @Slot(str)
     def _trust_device(self, mac: str):
@@ -524,6 +536,73 @@ class NetworkMonitorApp:
         """Load initial DNS history data."""
         self._window.dns_view.refresh()
 
+    # ── World Map ────────────────────────────────────────────
+
+    def _init_world_map_timer(self):
+        """Periodically update the world map with geo-IP connection data."""
+        self._world_map_timer = QTimer()
+        self._world_map_timer.setInterval(5000)
+        self._world_map_timer.timeout.connect(self._update_world_map)
+        self._world_map_timer.start()
+
+    def _update_world_map(self):
+        """Query geoip cache from captured packets and update world map."""
+        try:
+            if not hasattr(self._capture_worker, "get_captured_packets"):
+                return
+            geoip = self._capture_worker.get_geoip()
+            packets = self._capture_worker.get_captured_packets()[-500:]
+
+            # Count connections by country
+            country_counts: dict[str, dict] = {}
+            for p in packets:
+                for key in ("src", "dst"):
+                    ip = p.get(key, "")
+                    if ip and not geoip.is_private(ip):
+                        geo = geoip.lookup(ip)
+                        cc = geo.get("country_code", "")
+                        cn = geo.get("country", "")
+                        if cc and cc != "?":
+                            if cc not in country_counts:
+                                country_counts[cc] = {
+                                    "country_code": cc,
+                                    "country_name": cn,
+                                    "threat": "safe",
+                                    "count": 0,
+                                }
+                            country_counts[cc]["count"] += 1
+
+            # Cross-reference with security events for threat coloring
+            events = self._capture_worker.get_security_events()
+            threat_ips = set()
+            warning_ips = set()
+            for ev in events[-100:]:
+                sev = ev.get("severity", "info")
+                for key in ("source_ip", "dest_ip"):
+                    ip = ev.get(key, "")
+                    if ip:
+                        if sev == "critical":
+                            threat_ips.add(ip)
+                        elif sev == "warning":
+                            warning_ips.add(ip)
+
+            for p in packets:
+                for key in ("src", "dst"):
+                    ip = p.get(key, "")
+                    if ip and not geoip.is_private(ip):
+                        geo = geoip.lookup(ip)
+                        cc = geo.get("country_code", "")
+                        if cc in country_counts:
+                            if ip in threat_ips:
+                                country_counts[cc]["threat"] = "critical"
+                            elif ip in warning_ips and country_counts[cc]["threat"] != "critical":
+                                country_counts[cc]["threat"] = "warning"
+
+            connections = list(country_counts.values())
+            self._window.dashboard_view.update_world_map(connections)
+        except Exception:
+            pass
+
     # ── Security Score ─────────────────────────────────────────
 
     def _init_security_score_timer(self):
@@ -706,3 +785,5 @@ class NetworkMonitorApp:
             self._top_talkers_timer.stop()
         if hasattr(self, "_security_score_timer"):
             self._security_score_timer.stop()
+        if hasattr(self, "_world_map_timer"):
+            self._world_map_timer.stop()

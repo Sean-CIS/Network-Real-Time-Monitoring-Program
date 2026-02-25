@@ -63,6 +63,9 @@ class MainWindow(QMainWindow):
         # Status bar
         self._setup_status_bar()
 
+        # Apply glow effects to dashboard widgets
+        self._apply_glow_effects()
+
         # CRT scanline overlay
         self._scanlines = ScanlineOverlay(self)
         self._scanlines.raise_()
@@ -97,3 +100,20 @@ class MainWindow(QMainWindow):
 
     def _apply_theme(self):
         self.setStyleSheet(theme.GLOBAL_STYLESHEET)
+
+    def _apply_glow_effects(self):
+        """Apply phosphor glow effects to key dashboard widgets."""
+        dv = self.dashboard_view
+        # Glow on gauges
+        for gauge in (dv._gauge_score, dv._gauge_bw,
+                      dv._gauge_latency, dv._gauge_threat):
+            effect = theme.apply_glow(gauge, theme.GREEN_GLOW, blur_radius=12)
+            anim = theme.PulsingGlow(effect, min_blur=6, max_blur=14,
+                                     duration_ms=2000, parent=gauge)
+            anim.start()
+
+        # Glow on topology map
+        theme.apply_glow(dv._topology_map, theme.GREEN_GLOW, blur_radius=10)
+
+        # Glow on world map
+        theme.apply_glow(dv._world_map, theme.GREEN_GLOW, blur_radius=10)

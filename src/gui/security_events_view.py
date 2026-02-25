@@ -1,12 +1,13 @@
 """Security Events view with active threat dashboard and firewall rule suggestions."""
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QDialog,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -36,12 +37,29 @@ _THREAT_LEVELS = {
 
 
 class ThreatDashboard(QWidget):
-    """Compact threat level dashboard panel."""
+    """Compact threat level dashboard panel with pulsing threat indicator."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 4, 8, 4)
+
+        # Pulsing threat dot
+        self._pulse_dot = QLabel("\u25cf")
+        self._pulse_dot.setStyleSheet(
+            f"color: {theme.GREEN}; font-size: 18px; padding: 0 4px;"
+        )
+        self._pulse_opacity = QGraphicsOpacityEffect(self._pulse_dot)
+        self._pulse_opacity.setOpacity(1.0)
+        self._pulse_dot.setGraphicsEffect(self._pulse_opacity)
+
+        self._pulse_anim = QPropertyAnimation(self._pulse_opacity, b"opacity")
+        self._pulse_anim.setDuration(800)
+        self._pulse_anim.setStartValue(0.3)
+        self._pulse_anim.setEndValue(1.0)
+        self._pulse_anim.setEasingCurve(QEasingCurve.InOutSine)
+        self._pulse_anim.setLoopCount(-1)
+        layout.addWidget(self._pulse_dot)
 
         # Threat level badge
         self._level_label = QLabel("[ SAFE ]")
@@ -71,10 +89,31 @@ class ThreatDashboard(QWidget):
 
         layout.addStretch()
 
+        self._current_level = "safe"
+        self._border_flash = False
+
+        # Border flash timer for elevated/critical
+        self._border_timer = QTimer(self)
+        self._border_timer.setInterval(600)
+        self._border_timer.timeout.connect(self._toggle_border)
+
+        self._apply_base_style(theme.BORDER)
+
+    def _apply_base_style(self, border_color: str):
         self.setStyleSheet(
             f"ThreatDashboard {{ background-color: {theme.BG_SURFACE}; "
-            f"border: 1px solid {theme.BORDER}; border-radius: 2px; }}"
+            f"border: 1px solid {border_color}; border-radius: 2px; }}"
         )
+
+    def _toggle_border(self):
+        self._border_flash = not self._border_flash
+        if self._current_level == "critical":
+            color = theme.RED if self._border_flash else theme.BG_SURFACE
+        elif self._current_level == "elevated":
+            color = theme.AMBER if self._border_flash else theme.BG_SURFACE
+        else:
+            color = theme.BORDER
+        self._apply_base_style(color)
 
     def update_threat_level(self, level: str):
         """Set threat level: 'safe', 'elevated', or 'critical'."""
@@ -83,6 +122,23 @@ class ThreatDashboard(QWidget):
         self._level_label.setStyleSheet(
             f"color: {color}; font-size: 16px; font-weight: bold; padding: 4px 12px;"
         )
+        self._pulse_dot.setStyleSheet(
+            f"color: {color}; font-size: 18px; padding: 0 4px;"
+        )
+
+        prev = self._current_level
+        self._current_level = level
+
+        if level in ("elevated", "critical"):
+            if not self._pulse_anim.state() == QPropertyAnimation.Running:
+                self._pulse_anim.start()
+            if not self._border_timer.isActive():
+                self._border_timer.start()
+        else:
+            self._pulse_anim.stop()
+            self._pulse_opacity.setOpacity(1.0)
+            self._border_timer.stop()
+            self._apply_base_style(theme.BORDER)
 
     def update_stats(self, external_ips: int = 0, unresolved: int = 0,
                      events_24h: int = 0):

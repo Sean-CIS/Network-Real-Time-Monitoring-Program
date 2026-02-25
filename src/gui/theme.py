@@ -1,8 +1,8 @@
 """Retro CRT terminal theme — phosphor green on dark, with scanline overlay."""
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QGraphicsDropShadowEffect, QWidget
 
 
 # ── CRT Color Palette ────────────────────────────────────────────────────────
@@ -31,6 +31,10 @@ AMBER = "#ffb000"            # Warnings, caution
 RED = "#ff3333"              # Critical, errors, danger
 CYAN = "#00cccc"             # Info, teal accents
 BLUE = "#0088ff"             # Informational blue
+
+# Map / gauge specific
+GREEN_GLOW = GREEN           # Semantic alias for glow color
+GRID_LINE = "#0d2a0d"        # Very dark grid lines for map/gauge backgrounds
 
 # Chart line colors
 CHART_COLORS = [GREEN, AMBER, RED, CYAN, "#66ff66", "#cc8800"]
@@ -204,6 +208,32 @@ STATUS_BAR_STYLE = (
     f"border-top: 1px solid {BORDER}; padding: 2px; }}"
     f"QStatusBar::item {{ border: none; }}"
 )
+
+
+# ── Glow Effect Utilities ─────────────────────────────────────────────────────
+
+
+def apply_glow(widget, color=GREEN, blur_radius=15, offset=(0, 0)):
+    """Apply a static phosphor glow drop-shadow to any QWidget."""
+    effect = QGraphicsDropShadowEffect(widget)
+    effect.setColor(QColor(color))
+    effect.setBlurRadius(blur_radius)
+    effect.setOffset(offset[0], offset[1])
+    widget.setGraphicsEffect(effect)
+    return effect
+
+
+class PulsingGlow(QPropertyAnimation):
+    """Animate the blur radius of a QGraphicsDropShadowEffect to pulse."""
+
+    def __init__(self, effect: QGraphicsDropShadowEffect,
+                 min_blur=5, max_blur=25, duration_ms=1200, parent=None):
+        super().__init__(effect, b"blurRadius", parent)
+        self.setStartValue(float(min_blur))
+        self.setEndValue(float(max_blur))
+        self.setDuration(duration_ms)
+        self.setEasingCurve(QEasingCurve.InOutSine)
+        self.setLoopCount(-1)
 
 
 # ── CRT Scanline Overlay Widget ──────────────────────────────────────────────

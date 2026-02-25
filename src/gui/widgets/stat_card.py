@@ -1,13 +1,14 @@
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
 
 from src.gui import theme
 
 
 class StatCard(QFrame):
-    """A small card widget displaying a label and a value."""
+    """A small card widget displaying a label, value, and optional sparkline."""
 
-    def __init__(self, title: str = "", value: str = "\u2014", parent=None):
+    def __init__(self, title: str = "", value: str = "\u2014",
+                 sparkline: bool = False, parent=None):
         super().__init__(parent)
         self.setFrameShape(QFrame.StyledPanel)
         self.setStyleSheet(
@@ -32,17 +33,34 @@ class StatCard(QFrame):
         )
         self._title_label.setAlignment(Qt.AlignLeft)
 
+        # Value row with optional sparkline
+        value_row = QHBoxLayout()
+        value_row.setSpacing(6)
         self._value_label = QLabel(value)
         self._value_label.setStyleSheet(
             f"color: {theme.GREEN}; font-size: 20px; font-weight: bold;"
         )
         self._value_label.setAlignment(Qt.AlignLeft)
+        value_row.addWidget(self._value_label)
+
+        self._sparkline = None
+        if sparkline:
+            from src.gui.widgets.sparkline import Sparkline
+            self._sparkline = Sparkline()
+            value_row.addWidget(self._sparkline)
+
+        value_row.addStretch()
 
         layout.addWidget(self._title_label)
-        layout.addWidget(self._value_label)
+        layout.addLayout(value_row)
 
     def set_value(self, value: str):
         self._value_label.setText(value)
 
     def set_title(self, title: str):
         self._title_label.setText(title)
+
+    def add_spark_point(self, value: float):
+        """Add a data point to the embedded sparkline (if enabled)."""
+        if self._sparkline:
+            self._sparkline.add_point(value)

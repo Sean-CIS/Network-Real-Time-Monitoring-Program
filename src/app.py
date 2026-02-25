@@ -1,11 +1,14 @@
 import sys
+from collections import defaultdict
 
 from PySide6.QtCore import Slot
 from PySide6.QtWidgets import QApplication
 
 from src.core.alerts import AlertEngine
 from src.core.bandwidth import BandwidthMonitor
+from src.core.connections import ConnectionsMonitor
 from src.core.discovery import DiscoveryWorker
+from src.core.geoip import GeoIPResolver
 from src.core.latency import LatencyMonitor
 from src.core.packet_capture import PacketCaptureWorker
 from src.core.port_scanner import PortScanWorker
@@ -27,12 +30,59 @@ class NetworkMonitorApp:
         self._window = MainWindow()
         self._alert_engine = AlertEngine()
 
+        self._init_geoip()
         self._init_bandwidth()
         self._init_latency()
         self._init_discovery()
+        self._init_connections()
         self._init_port_scanner()
         self._init_packet_capture()
         self._init_alerts()
+
+    # ── GeoIP ─────────────────────────────────────────────────
+
+    def _init_geoip(self):
+        self._geoip = GeoIPResolver()
+        self._geoip.load_cache()
+        self._geoip.resolved.connect(self._on_geoip_resolved)
+
+    @Slot(dict)
+    def _on_geoip_resolved(self, results: dict):
+        """Called when a batch of IPs has been geo-resolved."""
+        self._update_world_map()
+        # Push updated geo data to connections view
+        self._window.connections_view.set_geoip_data(self._geoip.get_all_cached())
+
+    def _update_world_map(self):
+        """Aggregate GeoIP data into connection endpoints for the world map."""
+        cache = self._geoip.get_all_cached()
+        if not cache:
+            return
+
+        # Aggregate by (lat, lon) rounded to reduce duplicates
+        agg = defaultdict(lambda: {"lat": 0, "lon": 0, "country": "", "city": "", "isp": "", "count": 0})
+        for ip, info in cache.items():
+            lat = round(info.get("lat", 0), 1)
+            lon = round(info.get("lon", 0), 1)
+            key = (lat, lon)
+            agg[key]["lat"] = info.get("lat", 0)
+            agg[key]["lon"] = info.get("lon", 0)
+            agg[key]["country"] = info.get("country", "")
+            agg[key]["city"] = info.get("city", "")
+            agg[key]["isp"] = info.get("isp", "")
+            agg[key]["count"] += 1
+
+        self._window.dashboard_view.world_map.set_connections(list(agg.values()))
+
+        # Update top destinations table
+        dest_list = []
+        country_agg = defaultdict(lambda: {"country": "", "city": "", "count": 0})
+        for info in agg.values():
+            country = info.get("country", "Unknown")
+            country_agg[country]["country"] = country
+            country_agg[country]["city"] = info.get("city", "")
+            country_agg[country]["count"] += info.get("count", 0)
+        self._window.dashboard_view.update_top_destinations(list(country_agg.values()))
 
     # ── Bandwidth ──────────────────────────────────────────────
 
@@ -106,6 +156,42 @@ class NetworkMonitorApp:
         online = sum(1 for d in all_devices if d.get("is_online"))
         self._window.dashboard_view.update_device_count(online)
 
+        # Update topology map
+        self._window.dashboard_view.topology_map.set_devices(all_devices)
+
+    # ── Connections Monitor ───────────────────────────────────
+
+    def _init_connections(self):
+        interval = get("connections", "poll_interval_s", 2)
+        self._conn_monitor = ConnectionsMonitor(interval_s=interval)
+        self._conn_monitor.data_ready.connect(self._on_connections_data)
+        self._conn_monitor.error_occurred.connect(self._on_error)
+        if get("connections", "enabled", True):
+            self._conn_monitor.start()
+
+    @Slot(list)
+    def _on_connections_data(self, connections: list):
+        # Push GeoIP data to connections view
+        self._window.connections_view.set_geoip_data(self._geoip.get_all_cached())
+        self._window.connections_view.update_connections(connections)
+
+        # Update dashboard counts
+        remote_ips = set()
+        for c in connections:
+            rip = c.get("remote_ip", "")
+            if rip:
+                remote_ips.add(rip)
+
+        geo_cache = self._geoip.get_all_cached()
+        destinations = len(set(
+            geo_cache[ip].get("country", "") for ip in remote_ips if ip in geo_cache
+        ))
+        self._window.dashboard_view.update_connection_count(len(connections), destinations)
+
+        # Queue new external IPs for GeoIP resolution
+        self._geoip.queue_ips(remote_ips)
+        self._geoip.resolve_now()
+
     # ── Port Scanner ───────────────────────────────────────────
 
     def _init_port_scanner(self):
@@ -174,12 +260,14 @@ class NetworkMonitorApp:
         alerts = db.get_recent_alerts(100)
         self._window.alerts_view.update_alerts(alerts)
         self._window.dashboard_view.update_alert_count(len(alerts))
+        self._window.dashboard_view.update_alert_ticker(alerts)
 
     @Slot(dict)
     def _on_alert(self, alert: dict):
         alerts = db.get_recent_alerts(100)
         self._window.alerts_view.update_alerts(alerts)
         self._window.dashboard_view.update_alert_count(len(alerts))
+        self._window.dashboard_view.update_alert_ticker(alerts)
 
     def _clear_alerts(self):
         self._window.alerts_view.clear_alerts()
@@ -203,5 +291,9 @@ class NetworkMonitorApp:
             self._bw_monitor.stop()
         if hasattr(self, "_latency_monitor"):
             self._latency_monitor.stop()
+        if hasattr(self, "_conn_monitor"):
+            self._conn_monitor.stop()
+        if hasattr(self, "_geoip"):
+            self._geoip.stop()
         if hasattr(self, "_capture_worker") and self._capture_worker.isRunning():
             self._capture_worker.stop()

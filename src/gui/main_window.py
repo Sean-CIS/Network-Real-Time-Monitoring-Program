@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
 
 from src.gui.alerts_view import AlertsView
 from src.gui.bandwidth_view import BandwidthView
+from src.gui.connections_view import ConnectionsView
 from src.gui.dashboard import DashboardView
 from src.gui.devices_view import DevicesView
 from src.gui.latency_view import LatencyView
@@ -56,6 +57,7 @@ class MainWindow(QMainWindow):
         self.bandwidth_view = BandwidthView()
         self.latency_view = LatencyView()
         self.devices_view = DevicesView()
+        self.connections_view = ConnectionsView()
         self.ports_view = PortsView()
         self.packets_view = PacketsView()
         self.alerts_view = AlertsView()
@@ -65,6 +67,7 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(self.bandwidth_view, "Bandwidth")
         self._tabs.addTab(self.latency_view, "Latency")
         self._tabs.addTab(self.devices_view, "Devices")
+        self._tabs.addTab(self.connections_view, "Connections")
         self._tabs.addTab(self.ports_view, "Port Scanner")
         self._tabs.addTab(self.packets_view, "Packet Capture")
         self._tabs.addTab(self.alerts_view, "Alerts")

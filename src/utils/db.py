@@ -75,9 +75,37 @@ def init_db():
             version TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS geoip_cache (
+            ip TEXT PRIMARY KEY,
+            lat REAL,
+            lon REAL,
+            country TEXT,
+            country_code TEXT,
+            city TEXT,
+            isp TEXT,
+            cached_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS connection_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            local_ip TEXT,
+            local_port INTEGER,
+            remote_ip TEXT,
+            remote_port INTEGER,
+            protocol TEXT,
+            status TEXT,
+            pid INTEGER,
+            process_name TEXT,
+            country TEXT,
+            city TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_bandwidth_ts ON bandwidth_history(timestamp);
         CREATE INDEX IF NOT EXISTS idx_latency_ts ON latency_history(timestamp);
         CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_geoip_cached ON geoip_cache(cached_at);
+        CREATE INDEX IF NOT EXISTS idx_connlog_ts ON connection_log(timestamp);
     """
     )
     conn.commit()
@@ -144,3 +172,41 @@ def get_recent_alerts(limit: int = 100) -> list[dict]:
         "SELECT * FROM alerts ORDER BY timestamp DESC LIMIT ?", (limit,)
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── GeoIP cache ──────────────────────────────────────────────
+
+def get_cached_geoip(ip: str) -> Optional[dict]:
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM geoip_cache WHERE ip = ?", (ip,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_all_cached_geoip() -> dict[str, dict]:
+    conn = get_connection()
+    rows = conn.execute("SELECT * FROM geoip_cache").fetchall()
+    return {r["ip"]: dict(r) for r in rows}
+
+
+def upsert_geoip(ip: str, lat: float, lon: float, country: str,
+                 country_code: str, city: str, isp: str):
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO geoip_cache (ip, lat, lon, country, country_code, city, isp, cached_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(ip) DO UPDATE SET
+             lat=excluded.lat, lon=excluded.lon, country=excluded.country,
+             country_code=excluded.country_code, city=excluded.city,
+             isp=excluded.isp, cached_at=excluded.cached_at
+        """,
+        (ip, lat, lon, country, country_code, city, isp, datetime.now().isoformat()),
+    )
+    conn.commit()
+
+
+def purge_expired_geoip(ttl_hours: int = 24):
+    conn = get_connection()
+    from datetime import timedelta
+    cutoff = (datetime.now() - timedelta(hours=ttl_hours)).isoformat()
+    conn.execute("DELETE FROM geoip_cache WHERE cached_at < ?", (cutoff,))
+    conn.commit()

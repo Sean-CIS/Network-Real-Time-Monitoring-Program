@@ -40,3 +40,16 @@ alerts:
   latency_threshold_ms: 200       # Alert if ping exceeds this
   device_offline_timeout_s: 60    # Alert if device not seen for this long
   cooldown_s: 300                 # Suppress duplicate alerts for 5 minutes
+
+geoip:
+  enabled: true
+  cache_ttl_hours: 24
+  api_url: "http://ip-api.com/batch"
+
+connections:
+  enabled: true
+  poll_interval_s: 2
+
+topology:
+  enabled: true
+  auto_layout: true

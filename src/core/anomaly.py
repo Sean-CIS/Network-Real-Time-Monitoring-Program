@@ -123,12 +123,11 @@ class AnomalyDetector(QObject):
                 b["variance"] = (1 - alpha) * b["variance"] + alpha * diff * (value - b["mean"])
 
             # Persist every 50 samples
-            if n % 50 == 0:
-                std = math.sqrt(max(b["variance"], 0))
-                mean = b["mean"]
-                count = n
-        else:
-            return
+            if n % 50 != 0:
+                return
+            std = math.sqrt(max(b["variance"], 0))
+            mean = b["mean"]
+            count = n
 
         # DB write outside lock
         try:

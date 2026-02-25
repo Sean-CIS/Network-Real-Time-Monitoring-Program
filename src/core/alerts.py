@@ -19,6 +19,8 @@ class AlertEngine(QObject):
         self._cooldown_period_s = 300.0
         self._cooldowns: dict[str, float] = {}
         self._known_devices: set[str] = set()
+        self._repeat_counts: dict[str, int] = {}  # track repeat alerts per key
+        self._max_repeats = 3  # suppress after this many identical alerts
 
     def configure(self, bandwidth_mbps: float = 100.0, latency_ms: float = 200.0,
                   offline_timeout_s: float = 60.0, cooldown_s: float = 300.0):
@@ -58,6 +60,10 @@ class AlertEngine(QObject):
             host = r.get("host", "")
             label = r.get("label", host)
 
+            # is_alive=None means unknown (no ping available / suppressed) — skip alerting
+            if r.get("is_alive") is None:
+                continue
+
             if not r.get("is_alive"):
                 self._emit_alert(
                     alert_type="latency_high",
@@ -91,12 +97,52 @@ class AlertEngine(QObject):
 
         self._known_devices = current_ips
 
+    def check_security_event(self, event: dict):
+        """Process security events from IDS, DNS monitor, anomaly detector, threat intel, SET defense."""
+        alert_type = event.get("rule_id", event.get("category", "security"))
+        severity = event.get("severity", "warning")
+        title = event.get("title", "Security Event")
+        description = event.get("description", "")
+        src_ip = event.get("src_ip", "")
+        dst_ip = event.get("dst_ip", "")
+
+        source = src_ip or dst_ip or "network"
+        message = f"{title}: {description}" if description else title
+
+        self._emit_alert(
+            alert_type=alert_type,
+            severity=severity,
+            message=message,
+            source=source,
+        )
+
+        # Also persist to security_events table
+        db.insert_security_event(
+            rule_id=event.get("rule_id", "unknown"),
+            severity=severity,
+            title=title,
+            description=description,
+            src_ip=src_ip,
+            dst_ip=dst_ip,
+            src_port=event.get("src_port"),
+            dst_port=event.get("dst_port"),
+            evidence=event.get("evidence", ""),
+            recommended_action=event.get("recommended_action", ""),
+        )
+
     def _emit_alert(self, alert_type: str, severity: str, message: str, source: str = ""):
         key = f"{alert_type}:{source}"
         now = time.time()
+
+        # Cooldown check
         if now - self._cooldowns.get(key, 0) < self._cooldown_period_s:
             return
         self._cooldowns[key] = now
+
+        # Repeat suppression: after N identical alerts, suppress until cooldown resets
+        self._repeat_counts[key] = self._repeat_counts.get(key, 0) + 1
+        if self._repeat_counts[key] > self._max_repeats:
+            return
 
         alert = {
             "timestamp": datetime.now().isoformat(),

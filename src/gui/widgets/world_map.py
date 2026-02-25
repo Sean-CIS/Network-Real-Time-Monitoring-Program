@@ -1,207 +1,323 @@
-"""Professional world map widget with animated connection arcs using QPainter."""
+"""Interactive world map using QWebEngineView + Leaflet.js with real map tiles."""
 
-import math
-from PySide6.QtCore import Qt, QRectF, QPointF, QTimer
-from PySide6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QPainterPath, QFont,
-    QRadialGradient, QLinearGradient, QPolygonF,
-)
-from PySide6.QtWidgets import QWidget, QToolTip
+from PySide6.QtCore import QUrl, Signal
+from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebChannel import QWebChannel
+from PySide6.QtWidgets import QVBoxLayout, QWidget
 
-from src.data.world_coordinates import ALL_LAND_POLYGONS
+
+LEAFLET_HTML = """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body, #map { width: 100%; height: 100%; background: #11111b; }
+  .leaflet-control-attribution { display: none !important; }
+  .leaflet-control-zoom a {
+    background-color: #313244 !important;
+    color: #cdd6f4 !important;
+    border-color: #45475a !important;
+  }
+  .leaflet-control-zoom a:hover { background-color: #45475a !important; }
+
+  /* Pulsing local marker */
+  @keyframes pulse-ring {
+    0%   { transform: scale(0.6); opacity: 1; }
+    100% { transform: scale(2.5); opacity: 0; }
+  }
+  .pulse-marker {
+    width: 14px; height: 14px;
+    background: #89b4fa;
+    border-radius: 50%;
+    box-shadow: 0 0 12px #89b4fa;
+    position: relative;
+  }
+  .pulse-marker::after {
+    content: '';
+    position: absolute;
+    top: -4px; left: -4px;
+    width: 22px; height: 22px;
+    border: 3px solid #89b4fa;
+    border-radius: 50%;
+    animation: pulse-ring 1.5s ease-out infinite;
+  }
+
+  /* Info overlay */
+  #info-overlay {
+    position: absolute;
+    top: 10px; left: 60px;
+    z-index: 1000;
+    background: rgba(30,30,46,0.9);
+    border: 1px solid #45475a;
+    border-radius: 8px;
+    padding: 10px 16px;
+    color: #cdd6f4;
+    font-family: "Consolas", monospace;
+    font-size: 12px;
+    pointer-events: none;
+  }
+  #info-overlay .title {
+    font-size: 14px;
+    font-weight: bold;
+    color: #89b4fa;
+    margin-bottom: 4px;
+  }
+  #info-overlay .stat {
+    color: #a6adc8;
+  }
+  #info-overlay .stat b { color: #cdd6f4; }
+
+  /* Legend */
+  #legend {
+    position: absolute;
+    bottom: 10px; left: 10px;
+    z-index: 1000;
+    background: rgba(30,30,46,0.9);
+    border: 1px solid #45475a;
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: #a6adc8;
+    font-family: "Consolas", monospace;
+    font-size: 11px;
+    pointer-events: none;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+  /* Custom popup */
+  .leaflet-popup-content-wrapper {
+    background: #1e1e2e !important;
+    border: 1px solid #45475a !important;
+    border-radius: 8px !important;
+    color: #cdd6f4 !important;
+    font-family: "Consolas", monospace !important;
+  }
+  .leaflet-popup-tip { background: #1e1e2e !important; }
+  .popup-title { font-weight: bold; color: #89b4fa; font-size: 13px; margin-bottom: 4px; }
+  .popup-row { color: #a6adc8; font-size: 11px; }
+  .popup-row b { color: #cdd6f4; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="info-overlay">
+  <div class="title">GLOBAL CONNECTIONS</div>
+  <div class="stat">Endpoints: <b id="stat-endpoints">0</b></div>
+  <div class="stat">Connections: <b id="stat-connections">0</b></div>
+  <div class="stat">Countries: <b id="stat-countries">0</b></div>
+</div>
+<div id="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#89b4fa;box-shadow:0 0 6px #89b4fa;"></div> Local Position</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#a6e3a1;"></div> Low (1-3)</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#f9e2af;"></div> Medium (4-10)</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#f38ba8;"></div> High (11+)</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#cba6f7;"></div> Threat Flagged</div>
+</div>
+
+<script>
+var map = L.map('map', {
+    center: [30, 0],
+    zoom: 2,
+    minZoom: 2,
+    maxZoom: 15,
+    zoomControl: true,
+    preferCanvas: true
+});
+
+// Dark tile layer - CartoDB Dark Matter
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    subdomains: 'abcd',
+    maxZoom: 19
+}).addTo(map);
+
+var localMarker = null;
+var connectionMarkers = [];
+var connectionLines = [];
+var threatCircles = [];
+
+function getColor(count, threat) {
+    if (threat) return '#cba6f7';
+    if (count <= 3) return '#a6e3a1';
+    if (count <= 10) return '#f9e2af';
+    return '#f38ba8';
+}
+
+function setLocalPosition(lat, lon) {
+    if (localMarker) map.removeLayer(localMarker);
+
+    var icon = L.divIcon({
+        className: '',
+        html: '<div class="pulse-marker"></div>',
+        iconSize: [14, 14],
+        iconAnchor: [7, 7]
+    });
+    localMarker = L.marker([lat, lon], { icon: icon, zIndexOffset: 1000 })
+        .addTo(map)
+        .bindPopup('<div class="popup-title">LOCAL POSITION</div>' +
+                   '<div class="popup-row">Lat: <b>' + lat.toFixed(4) + '</b></div>' +
+                   '<div class="popup-row">Lon: <b>' + lon.toFixed(4) + '</b></div>');
+}
+
+function clearConnections() {
+    connectionMarkers.forEach(function(m) { map.removeLayer(m); });
+    connectionLines.forEach(function(l) { map.removeLayer(l); });
+    threatCircles.forEach(function(c) { map.removeLayer(c); });
+    connectionMarkers = [];
+    connectionLines = [];
+    threatCircles = [];
+}
+
+function setConnections(connsJSON) {
+    clearConnections();
+    var conns = JSON.parse(connsJSON);
+
+    var totalConns = 0;
+    var countries = new Set();
+
+    conns.forEach(function(c) {
+        var lat = c.lat || 0;
+        var lon = c.lon || 0;
+        var count = c.count || 1;
+        var country = c.country || 'Unknown';
+        var city = c.city || '';
+        var isp = c.isp || '';
+        var threat = c.threat || false;
+
+        totalConns += count;
+        if (country) countries.add(country);
+
+        var color = getColor(count, threat);
+        var radius = Math.max(4, Math.min(14, 4 + Math.log2(count) * 3));
+
+        // Endpoint circle marker
+        var circle = L.circleMarker([lat, lon], {
+            radius: radius,
+            fillColor: color,
+            fillOpacity: 0.8,
+            color: color,
+            weight: 1,
+            opacity: 0.6
+        }).addTo(map);
+
+        // Popup
+        var popupHtml = '<div class="popup-title">' + city + (city && country ? ', ' : '') + country + '</div>' +
+                        '<div class="popup-row">Connections: <b>' + count + '</b></div>' +
+                        '<div class="popup-row">ISP: <b>' + (isp || 'N/A') + '</b></div>' +
+                        '<div class="popup-row">Coords: <b>' + lat.toFixed(2) + ', ' + lon.toFixed(2) + '</b></div>';
+        if (threat) {
+            popupHtml += '<div class="popup-row" style="color:#f38ba8;font-weight:bold;">THREAT FLAGGED</div>';
+        }
+        circle.bindPopup(popupHtml);
+        connectionMarkers.push(circle);
+
+        // Threat glow ring
+        if (threat) {
+            var glow = L.circleMarker([lat, lon], {
+                radius: radius + 8,
+                fillColor: '#f38ba8',
+                fillOpacity: 0.15,
+                color: '#f38ba8',
+                weight: 2,
+                opacity: 0.4,
+                dashArray: '4 4'
+            }).addTo(map);
+            threatCircles.push(glow);
+        }
+
+        // Arc line from local to endpoint
+        if (localMarker) {
+            var localLatLng = localMarker.getLatLng();
+            var midLat = (localLatLng.lat + lat) / 2;
+            var midLon = (localLatLng.lng + lon) / 2;
+            // Create curved path using intermediate points
+            var dist = Math.sqrt(Math.pow(lat - localLatLng.lat, 2) + Math.pow(lon - localLatLng.lng, 2));
+            var offset = dist * 0.15;
+            var points = [];
+            var steps = 30;
+            for (var i = 0; i <= steps; i++) {
+                var t = i / steps;
+                var cLat = (1-t)*(1-t)*localLatLng.lat + 2*(1-t)*t*(midLat + offset) + t*t*lat;
+                var cLon = (1-t)*(1-t)*localLatLng.lng + 2*(1-t)*t*midLon + t*t*lon;
+                points.push([cLat, cLon]);
+            }
+
+            var lineAlpha = Math.min(0.7, 0.15 + count * 0.05);
+            var lineWeight = Math.max(1, Math.min(4, 0.8 + count * 0.3));
+
+            var line = L.polyline(points, {
+                color: color,
+                weight: lineWeight,
+                opacity: lineAlpha,
+                smoothFactor: 1,
+                dashArray: threat ? '6 4' : null
+            }).addTo(map);
+            connectionLines.push(line);
+        }
+    });
+
+    // Update overlay stats
+    document.getElementById('stat-endpoints').textContent = conns.length;
+    document.getElementById('stat-connections').textContent = totalConns;
+    document.getElementById('stat-countries').textContent = countries.size;
+}
+
+// Initialize with default local position
+setLocalPosition(37.8, -122.4);
+</script>
+</body>
+</html>"""
 
 
 class WorldMapWidget(QWidget):
-    """Renders a world map with animated connection arcs to GeoIP-resolved IPs."""
+    """Interactive world map using Leaflet.js via QWebEngineView."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumSize(500, 280)
-        self._connections: list[dict] = []  # [{lat, lon, country, city, count, ...}]
-        self._local_lat = 37.8  # default: San Francisco
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self._web = QWebEngineView()
+        self._web.setHtml(LEAFLET_HTML, QUrl("about:blank"))
+        layout.addWidget(self._web)
+
+        self._connections: list[dict] = []
+        self._local_lat = 37.8
         self._local_lon = -122.4
-        self._pulse_phase = 0.0
-        self._hover_point = None
+        self._page_loaded = False
 
-        self.setMouseTracking(True)
+        self._web.loadFinished.connect(self._on_load)
 
-        # Animation timer for pulsing connection dots
-        self._pulse_timer = QTimer(self)
-        self._pulse_timer.setInterval(33)  # ~30fps
-        self._pulse_timer.timeout.connect(self._pulse_tick)
-        self._pulse_timer.start()
+    def _on_load(self, ok: bool):
+        if ok:
+            self._page_loaded = True
+            self._push_local()
+            if self._connections:
+                self._push_connections()
+
+    def _run_js(self, js: str):
+        if self._page_loaded:
+            self._web.page().runJavaScript(js)
 
     def set_local_position(self, lat: float, lon: float):
         self._local_lat = lat
         self._local_lon = lon
-        self.update()
+        self._push_local()
+
+    def _push_local(self):
+        self._run_js(f"setLocalPosition({self._local_lat}, {self._local_lon});")
 
     def set_connections(self, connections: list[dict]):
-        """Set connection endpoints. Each dict: {lat, lon, country, city, count, isp}."""
         self._connections = connections
-        self.update()
+        self._push_connections()
 
-    def _pulse_tick(self):
-        self._pulse_phase = (self._pulse_phase + 0.03) % 1.0
-        if self._connections:
-            self.update()
-
-    def _lonlat_to_pixel(self, lon: float, lat: float) -> QPointF:
-        """Mercator projection: lon/lat → pixel coordinates."""
-        w = self.width()
-        h = self.height()
-        # Clamp latitude to avoid infinity in mercator
-        lat = max(-80, min(80, lat))
-        x = (lon + 180) / 360 * w
-        lat_rad = math.radians(lat)
-        merc_y = math.log(math.tan(math.pi / 4 + lat_rad / 2))
-        y = h / 2 - (merc_y / math.pi) * (h / 2)
-        return QPointF(x, y)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-
-        w = self.width()
-        h = self.height()
-
-        # Ocean background
-        painter.fillRect(0, 0, w, h, QColor("#11111b"))
-
-        # Subtle grid lines
-        painter.setPen(QPen(QColor(255, 255, 255, 12), 0.5))
-        for lon in range(-180, 181, 30):
-            p = self._lonlat_to_pixel(lon, 0)
-            painter.drawLine(QPointF(p.x(), 0), QPointF(p.x(), h))
-        for lat in range(-60, 61, 30):
-            p = self._lonlat_to_pixel(0, lat)
-            painter.drawLine(QPointF(0, p.y()), QPointF(w, p.y()))
-
-        # Draw continents
-        land_fill = QColor("#313244")
-        land_outline = QColor("#45475a")
-        painter.setBrush(QBrush(land_fill))
-        painter.setPen(QPen(land_outline, 0.8))
-
-        for polygon_coords in ALL_LAND_POLYGONS:
-            poly = QPolygonF()
-            for lon, lat in polygon_coords:
-                pt = self._lonlat_to_pixel(lon, lat)
-                poly.append(pt)
-            if len(poly) >= 3:
-                painter.drawPolygon(poly)
-
-        # Draw connection arcs
-        local_pt = self._lonlat_to_pixel(self._local_lon, self._local_lat)
-
-        # Local position marker (pulsing glow)
-        glow_radius = 6 + 3 * math.sin(self._pulse_phase * math.pi * 2)
-        glow = QRadialGradient(local_pt, glow_radius * 2)
-        glow.setColorAt(0, QColor(137, 180, 250, 180))
-        glow.setColorAt(0.5, QColor(137, 180, 250, 60))
-        glow.setColorAt(1, QColor(137, 180, 250, 0))
-        painter.setBrush(QBrush(glow))
-        painter.setPen(Qt.NoPen)
-        painter.drawEllipse(local_pt, glow_radius * 2, glow_radius * 2)
-        painter.setBrush(QBrush(QColor("#89b4fa")))
-        painter.drawEllipse(local_pt, 4, 4)
-
-        # Draw each connection
-        for i, conn in enumerate(self._connections):
-            dst_pt = self._lonlat_to_pixel(conn.get("lon", 0), conn.get("lat", 0))
-            count = conn.get("count", 1)
-
-            # Color by connection intensity: green (few) → yellow → red (many)
-            if count <= 3:
-                line_color = QColor("#a6e3a1")
-                dot_color = QColor("#a6e3a1")
-            elif count <= 10:
-                line_color = QColor("#f9e2af")
-                dot_color = QColor("#f9e2af")
-            else:
-                line_color = QColor("#f38ba8")
-                dot_color = QColor("#f38ba8")
-
-            # Draw bezier arc
-            mid_x = (local_pt.x() + dst_pt.x()) / 2
-            mid_y = (local_pt.y() + dst_pt.y()) / 2
-            dist = math.hypot(dst_pt.x() - local_pt.x(), dst_pt.y() - local_pt.y())
-            # Arc upward proportional to distance
-            ctrl_y = mid_y - dist * 0.25
-            ctrl_pt = QPointF(mid_x, ctrl_y)
-
-            path = QPainterPath()
-            path.moveTo(local_pt)
-            path.quadTo(ctrl_pt, dst_pt)
-
-            line_alpha = min(180, 60 + count * 10)
-            line_color.setAlpha(line_alpha)
-            pen_width = max(1, min(3, 0.5 + count * 0.3))
-            painter.setPen(QPen(line_color, pen_width))
-            painter.setBrush(Qt.NoBrush)
-            painter.drawPath(path)
-
-            # Animated pulse dot traveling along the arc
-            phase = (self._pulse_phase + i * 0.13) % 1.0
-            t = phase
-            # Quadratic bezier: B(t) = (1-t)^2*P0 + 2(1-t)t*C + t^2*P1
-            bx = (1 - t) ** 2 * local_pt.x() + 2 * (1 - t) * t * ctrl_pt.x() + t ** 2 * dst_pt.x()
-            by = (1 - t) ** 2 * local_pt.y() + 2 * (1 - t) * t * ctrl_pt.y() + t ** 2 * dst_pt.y()
-            pulse_pt = QPointF(bx, by)
-
-            dot_color.setAlpha(200)
-            painter.setBrush(QBrush(dot_color))
-            painter.setPen(Qt.NoPen)
-            painter.drawEllipse(pulse_pt, 3, 3)
-
-            # Destination marker (glowing dot)
-            dst_glow = QRadialGradient(dst_pt, 8)
-            dst_glow.setColorAt(0, QColor(dot_color.red(), dot_color.green(), dot_color.blue(), 160))
-            dst_glow.setColorAt(1, QColor(dot_color.red(), dot_color.green(), dot_color.blue(), 0))
-            painter.setBrush(QBrush(dst_glow))
-            painter.setPen(Qt.NoPen)
-            painter.drawEllipse(dst_pt, 8, 8)
-            painter.setBrush(QBrush(QColor(dot_color.red(), dot_color.green(), dot_color.blue(), 220)))
-            painter.drawEllipse(dst_pt, 3, 3)
-
-            # Country label for top connections
-            if count >= 3 or len(self._connections) <= 8:
-                label = conn.get("city") or conn.get("country", "")
-                if label:
-                    painter.setPen(QColor(205, 214, 244, 180))
-                    font = QFont("Segoe UI", 8)
-                    painter.setFont(font)
-                    painter.drawText(dst_pt + QPointF(6, -4), label)
-
-        # Title overlay
-        painter.setPen(QColor("#cdd6f4"))
-        font = QFont("Segoe UI", 11, QFont.Bold)
-        painter.setFont(font)
-        painter.drawText(QRectF(10, 6, w, 24), Qt.AlignLeft | Qt.AlignTop, "Global Connections")
-
-        # Connection count legend
-        if self._connections:
-            total = sum(c.get("count", 1) for c in self._connections)
-            countries = len(set(c.get("country", "") for c in self._connections))
-            legend = f"{len(self._connections)} destinations  |  {total} connections  |  {countries} countries"
-            font = QFont("Consolas", 8)
-            painter.setFont(font)
-            painter.setPen(QColor("#a6adc8"))
-            painter.drawText(QRectF(10, h - 22, w - 20, 20), Qt.AlignLeft | Qt.AlignBottom, legend)
-
-        painter.end()
-
-    def mouseMoveEvent(self, event):
-        # Show tooltip for nearby connection endpoints
-        pos = event.position() if hasattr(event, 'position') else event.pos()
-        for conn in self._connections:
-            pt = self._lonlat_to_pixel(conn.get("lon", 0), conn.get("lat", 0))
-            if math.hypot(pt.x() - pos.x(), pt.y() - pos.y()) < 15:
-                city = conn.get("city", "Unknown")
-                country = conn.get("country", "Unknown")
-                isp = conn.get("isp", "")
-                count = conn.get("count", 1)
-                tip = f"{city}, {country}\n{isp}\nConnections: {count}"
-                QToolTip.showText(event.globalPosition().toPoint() if hasattr(event, 'globalPosition') else event.globalPos(), tip)
-                return
-        QToolTip.hideText()
+    def _push_connections(self):
+        import json
+        data = json.dumps(self._connections)
+        escaped = data.replace("\\", "\\\\").replace("'", "\\'")
+        self._run_js(f"setConnections('{escaped}');")

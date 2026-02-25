@@ -16,7 +16,7 @@ latency:
       label: "Google DNS"
     - host: 1.1.1.1
       label: "Cloudflare DNS"
-    - host: 192.168.1.1
+    - host: auto
       label: "Default Gateway"
 
 discovery:
@@ -53,3 +53,15 @@ connections:
 topology:
   enabled: true
   auto_layout: true
+
+security:
+  ids_enabled: true
+  dns_monitoring: true
+  flow_tracking: true
+  anomaly_detection: true
+  threat_intel: true
+  set_defense: true
+  port_scan_threshold: 15
+  brute_force_threshold: 10
+  large_transfer_mb: 50
+  anomaly_learning_samples: 100

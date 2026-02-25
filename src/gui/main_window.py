@@ -10,15 +10,18 @@ from src.gui.bandwidth_view import BandwidthView
 from src.gui.connections_view import ConnectionsView
 from src.gui.dashboard import DashboardView
 from src.gui.devices_view import DevicesView
+from src.gui.dns_view import DNSView
 from src.gui.latency_view import LatencyView
 from src.gui.packets_view import PacketsView
 from src.gui.ports_view import PortsView
+from src.gui.security_view import SecurityView
+from src.gui.set_defense_view import SETDefenseView
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Network Real-Time Monitor")
+        self.setWindowTitle("Network Real-Time Monitor — Security Operations Center")
         self.setMinimumSize(1200, 700)
         self.resize(1400, 800)
 
@@ -60,9 +63,12 @@ class MainWindow(QMainWindow):
         self.connections_view = ConnectionsView()
         self.ports_view = PortsView()
         self.packets_view = PacketsView()
+        self.security_view = SecurityView()
+        self.dns_view = DNSView()
+        self.set_defense_view = SETDefenseView()
         self.alerts_view = AlertsView()
 
-        # Add tabs
+        # Add tabs — 11 total
         self._tabs.addTab(self.dashboard_view, "Dashboard")
         self._tabs.addTab(self.bandwidth_view, "Bandwidth")
         self._tabs.addTab(self.latency_view, "Latency")
@@ -70,6 +76,9 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(self.connections_view, "Connections")
         self._tabs.addTab(self.ports_view, "Port Scanner")
         self._tabs.addTab(self.packets_view, "Packet Capture")
+        self._tabs.addTab(self.security_view, "Security")
+        self._tabs.addTab(self.dns_view, "DNS Intel")
+        self._tabs.addTab(self.set_defense_view, "SET Defense")
         self._tabs.addTab(self.alerts_view, "Alerts")
 
         self.setCentralWidget(self._tabs)

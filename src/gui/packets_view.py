@@ -1,4 +1,5 @@
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Slot
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
@@ -13,6 +14,22 @@ from PySide6.QtWidgets import (
 
 from src.gui.widgets.live_chart import LiveChart
 from src.gui.widgets.stat_card import StatCard
+
+
+# Threat flag colors
+_THREAT_COLOR = "#f38ba8"
+_APP_PROTO_COLORS = {
+    "DNS": "#89b4fa",
+    "HTTP": "#a6e3a1",
+    "TLS": "#cba6f7",
+    "SSH": "#f9e2af",
+    "DHCP": "#94e2d5",
+    "FTP": "#fab387",
+    "SMTP": "#f38ba8",
+    "Telnet": "#f38ba8",
+    "ARP": "#585b70",
+    "ICMP": "#585b70",
+}
 
 
 class PacketsView(QWidget):
@@ -48,16 +65,22 @@ class PacketsView(QWidget):
         controls.addStretch()
         layout.addLayout(controls)
 
-        # Stat cards
+        # Stat cards — 2 rows
         cards_layout = QHBoxLayout()
         self._card_total = StatCard("Total Packets", "0")
         self._card_tcp = StatCard("TCP", "0")
         self._card_udp = StatCard("UDP", "0")
         self._card_other = StatCard("Other", "0")
+        self._card_dpi = StatCard("DPI Analyzed", "0")
+        self._card_threats = StatCard("Threat Flags", "0")
+        self._card_app_protos = StatCard("App Protocols", "0")
         cards_layout.addWidget(self._card_total)
         cards_layout.addWidget(self._card_tcp)
         cards_layout.addWidget(self._card_udp)
         cards_layout.addWidget(self._card_other)
+        cards_layout.addWidget(self._card_dpi)
+        cards_layout.addWidget(self._card_threats)
+        cards_layout.addWidget(self._card_app_protos)
         cards_layout.addStretch()
         layout.addLayout(cards_layout)
 
@@ -71,14 +94,17 @@ class PacketsView(QWidget):
         )
         layout.addWidget(self._proto_chart)
 
-        # Packet table
+        # Packet table — expanded with DPI columns
         self._table = QTableWidget()
-        columns = ["Time", "Source", "Destination", "Protocol", "Length", "Info"]
+        columns = ["Time", "Source", "Destination", "Protocol", "App Proto",
+                    "Length", "Info", "Threats"]
         self._table.setColumnCount(len(columns))
         self._table.setHorizontalHeaderLabels(columns)
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setAlternatingRowColors(True)
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        # Give Info column more space
+        self._table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
         self._table.setStyleSheet(
             """
             QTableWidget {
@@ -96,6 +122,9 @@ class PacketsView(QWidget):
         layout.addWidget(self._table, stretch=1)
 
         self._packet_count = 0
+        self._dpi_count = 0
+        self._threat_count = 0
+        self._app_proto_set: set[str] = set()
         self._proto_counts = {"TCP": 0, "UDP": 0, "Other": 0}
         self._max_display = 1000
 
@@ -123,11 +152,25 @@ class PacketsView(QWidget):
         else:
             self._proto_counts["Other"] += 1
 
+        # DPI stats
+        app_proto = pkt.get("app_protocol", "")
+        if app_proto:
+            self._dpi_count += 1
+            self._app_proto_set.add(app_proto)
+
+        threat_flags = pkt.get("threat_flags", [])
+        if threat_flags:
+            self._threat_count += len(threat_flags)
+
+        # Update cards
         self._packet_count_label.setText(f"Packets: {self._packet_count}")
         self._card_total.set_value(str(self._packet_count))
         self._card_tcp.set_value(str(self._proto_counts["TCP"]))
         self._card_udp.set_value(str(self._proto_counts["UDP"]))
         self._card_other.set_value(str(self._proto_counts["Other"]))
+        self._card_dpi.set_value(str(self._dpi_count))
+        self._card_threats.set_value(str(self._threat_count))
+        self._card_app_protos.set_value(str(len(self._app_proto_set)))
 
         # Add row to table
         row = self._table.rowCount()
@@ -140,8 +183,23 @@ class PacketsView(QWidget):
         self._table.setItem(row, 1, QTableWidgetItem(pkt.get("src", "")))
         self._table.setItem(row, 2, QTableWidgetItem(pkt.get("dst", "")))
         self._table.setItem(row, 3, QTableWidgetItem(proto))
-        self._table.setItem(row, 4, QTableWidgetItem(str(pkt.get("length", 0))))
-        self._table.setItem(row, 5, QTableWidgetItem(pkt.get("info", "")))
+
+        # App protocol with color
+        app_item = QTableWidgetItem(app_proto)
+        color = _APP_PROTO_COLORS.get(app_proto, "#cdd6f4")
+        app_item.setForeground(QColor(color))
+        self._table.setItem(row, 4, app_item)
+
+        self._table.setItem(row, 5, QTableWidgetItem(str(pkt.get("length", 0))))
+        self._table.setItem(row, 6, QTableWidgetItem(pkt.get("info", "")))
+
+        # Threat flags
+        flags_text = ", ".join(threat_flags) if threat_flags else ""
+        flags_item = QTableWidgetItem(flags_text)
+        if threat_flags:
+            flags_item.setForeground(QColor(_THREAT_COLOR))
+        self._table.setItem(row, 7, flags_item)
+
         self._table.scrollToBottom()
 
     def update_proto_chart(self, tcp_ps: float, udp_ps: float, other_ps: float):
@@ -150,9 +208,15 @@ class PacketsView(QWidget):
     def clear_packets(self):
         self._table.setRowCount(0)
         self._packet_count = 0
+        self._dpi_count = 0
+        self._threat_count = 0
+        self._app_proto_set.clear()
         self._proto_counts = {"TCP": 0, "UDP": 0, "Other": 0}
         self._card_total.set_value("0")
         self._card_tcp.set_value("0")
         self._card_udp.set_value("0")
         self._card_other.set_value("0")
+        self._card_dpi.set_value("0")
+        self._card_threats.set_value("0")
+        self._card_app_protos.set_value("0")
         self._proto_chart.clear_data()

@@ -101,11 +101,75 @@ def init_db():
             city TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS security_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            rule_id TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            title TEXT,
+            description TEXT,
+            src_ip TEXT,
+            dst_ip TEXT,
+            src_port INTEGER,
+            dst_port INTEGER,
+            evidence TEXT,
+            recommended_action TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS dns_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            src_ip TEXT,
+            query_name TEXT,
+            query_type TEXT,
+            response_ips TEXT,
+            response_code TEXT,
+            is_suspicious INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS flow_summary (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            src_ip TEXT,
+            dst_ip TEXT,
+            protocol TEXT,
+            app_protocol TEXT,
+            bytes_sent INTEGER DEFAULT 0,
+            bytes_recv INTEGER DEFAULT 0,
+            packets INTEGER DEFAULT 0,
+            duration_s REAL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS traffic_baseline (
+            metric TEXT PRIMARY KEY,
+            mean REAL DEFAULT 0,
+            std_dev REAL DEFAULT 0,
+            sample_count INTEGER DEFAULT 0,
+            updated_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS set_defense_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            category TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            title TEXT,
+            description TEXT,
+            src_ip TEXT,
+            dst_ip TEXT,
+            evidence TEXT,
+            recommended_action TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_bandwidth_ts ON bandwidth_history(timestamp);
         CREATE INDEX IF NOT EXISTS idx_latency_ts ON latency_history(timestamp);
         CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts(timestamp);
         CREATE INDEX IF NOT EXISTS idx_geoip_cached ON geoip_cache(cached_at);
         CREATE INDEX IF NOT EXISTS idx_connlog_ts ON connection_log(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_security_ts ON security_events(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_dns_ts ON dns_log(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_flow_ts ON flow_summary(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_set_defense_ts ON set_defense_events(timestamp);
     """
     )
     conn.commit()
@@ -210,3 +274,124 @@ def purge_expired_geoip(ttl_hours: int = 24):
     cutoff = (datetime.now() - timedelta(hours=ttl_hours)).isoformat()
     conn.execute("DELETE FROM geoip_cache WHERE cached_at < ?", (cutoff,))
     conn.commit()
+
+
+# ── Security Events ──────────────────────────────────────────
+
+def insert_security_event(rule_id: str, severity: str, title: str = "",
+                          description: str = "", src_ip: str = "", dst_ip: str = "",
+                          src_port: int = None, dst_port: int = None,
+                          evidence: str = "", recommended_action: str = ""):
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO security_events
+           (timestamp, rule_id, severity, title, description, src_ip, dst_ip,
+            src_port, dst_port, evidence, recommended_action)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (datetime.now().isoformat(), rule_id, severity, title, description,
+         src_ip, dst_ip, src_port, dst_port, evidence, recommended_action),
+    )
+    conn.commit()
+
+
+def get_recent_security_events(limit: int = 500) -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM security_events ORDER BY timestamp DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── DNS Log ──────────────────────────────────────────────────
+
+def insert_dns_log(src_ip: str, query_name: str, query_type: str = "",
+                   response_ips: str = "", response_code: str = "",
+                   is_suspicious: bool = False):
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO dns_log
+           (timestamp, src_ip, query_name, query_type, response_ips, response_code, is_suspicious)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (datetime.now().isoformat(), src_ip, query_name, query_type,
+         response_ips, response_code, int(is_suspicious)),
+    )
+    conn.commit()
+
+
+def get_recent_dns_logs(limit: int = 1000) -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM dns_log ORDER BY timestamp DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_dns_stats() -> dict:
+    conn = get_connection()
+    total = conn.execute("SELECT COUNT(*) FROM dns_log").fetchone()[0]
+    unique = conn.execute("SELECT COUNT(DISTINCT query_name) FROM dns_log").fetchone()[0]
+    suspicious = conn.execute("SELECT COUNT(*) FROM dns_log WHERE is_suspicious = 1").fetchone()[0]
+    nx = conn.execute("SELECT COUNT(*) FROM dns_log WHERE response_code = 'NXDOMAIN'").fetchone()[0]
+    return {"total": total, "unique_domains": unique, "suspicious": suspicious, "nx_domains": nx}
+
+
+# ── Flow Summary ─────────────────────────────────────────────
+
+def insert_flow_summary(src_ip: str, dst_ip: str, protocol: str = "",
+                        app_protocol: str = "", bytes_sent: int = 0,
+                        bytes_recv: int = 0, packets: int = 0, duration_s: float = 0):
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO flow_summary
+           (timestamp, src_ip, dst_ip, protocol, app_protocol, bytes_sent, bytes_recv, packets, duration_s)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (datetime.now().isoformat(), src_ip, dst_ip, protocol, app_protocol,
+         bytes_sent, bytes_recv, packets, duration_s),
+    )
+    conn.commit()
+
+
+# ── Traffic Baseline ─────────────────────────────────────────
+
+def upsert_baseline(metric: str, mean: float, std_dev: float, sample_count: int):
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO traffic_baseline (metric, mean, std_dev, sample_count, updated_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(metric) DO UPDATE SET
+             mean=excluded.mean, std_dev=excluded.std_dev,
+             sample_count=excluded.sample_count, updated_at=excluded.updated_at
+        """,
+        (metric, mean, std_dev, sample_count, datetime.now().isoformat()),
+    )
+    conn.commit()
+
+
+def get_baseline(metric: str) -> Optional[dict]:
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM traffic_baseline WHERE metric = ?", (metric,)).fetchone()
+    return dict(row) if row else None
+
+
+# ── SET Defense Events ───────────────────────────────────────
+
+def insert_set_defense_event(category: str, severity: str, title: str = "",
+                             description: str = "", src_ip: str = "", dst_ip: str = "",
+                             evidence: str = "", recommended_action: str = ""):
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO set_defense_events
+           (timestamp, category, severity, title, description, src_ip, dst_ip, evidence, recommended_action)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (datetime.now().isoformat(), category, severity, title, description,
+         src_ip, dst_ip, evidence, recommended_action),
+    )
+    conn.commit()
+
+
+def get_recent_set_defense_events(limit: int = 500) -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM set_defense_events ORDER BY timestamp DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return [dict(r) for r in rows]

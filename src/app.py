@@ -5,13 +5,19 @@ from PySide6.QtCore import Slot
 from PySide6.QtWidgets import QApplication
 
 from src.core.alerts import AlertEngine
+from src.core.anomaly import AnomalyDetector
 from src.core.bandwidth import BandwidthMonitor
 from src.core.connections import ConnectionsMonitor
 from src.core.discovery import DiscoveryWorker
+from src.core.dns_monitor import DNSMonitor
+from src.core.flow_tracker import FlowTracker
 from src.core.geoip import GeoIPResolver
+from src.core.ids import IntrusionDetectionSystem
 from src.core.latency import LatencyMonitor
 from src.core.packet_capture import PacketCaptureWorker
 from src.core.port_scanner import PortScanWorker
+from src.core.set_defense import SETDefense
+from src.core.threat_intel import ThreatIntelligence
 from src.gui.main_window import MainWindow
 from src.utils import db
 from src.utils.config import get, load_config
@@ -37,6 +43,7 @@ class NetworkMonitorApp:
         self._init_connections()
         self._init_port_scanner()
         self._init_packet_capture()
+        self._init_security_modules()
         self._init_alerts()
 
     # ── GeoIP ─────────────────────────────────────────────────
@@ -75,7 +82,6 @@ class NetworkMonitorApp:
         self._window.dashboard_view.world_map.set_connections(list(agg.values()))
 
         # Update top destinations table
-        dest_list = []
         country_agg = defaultdict(lambda: {"country": "", "city": "", "count": 0})
         for info in agg.values():
             country = info.get("country", "Unknown")
@@ -103,6 +109,11 @@ class NetworkMonitorApp:
         total_down = sum(v.get("speed_down", 0) for v in data.values())
         total_up = sum(v.get("speed_up", 0) for v in data.values())
         self._window.dashboard_view.update_bandwidth_summary(total_down, total_up)
+
+        # Feed anomaly detector
+        if hasattr(self, "_anomaly"):
+            total_bps = total_down + total_up
+            self._anomaly.update_metric("bandwidth", total_bps)
 
     # ── Latency ────────────────────────────────────────────────
 
@@ -192,6 +203,11 @@ class NetworkMonitorApp:
         self._geoip.queue_ips(remote_ips)
         self._geoip.resolve_now()
 
+        # Feed anomaly detector
+        if hasattr(self, "_anomaly"):
+            self._anomaly.update_metric("connections", len(connections))
+            self._anomaly.update_metric("unique_external_ips", len(remote_ips))
+
     # ── Port Scanner ───────────────────────────────────────────
 
     def _init_port_scanner(self):
@@ -243,6 +259,91 @@ class NetworkMonitorApp:
     def _stop_capture(self):
         self._capture_worker.stop()
         self._window.packets_view.set_capturing(False)
+
+    # ── Security Modules ───────────────────────────────────────
+
+    def _init_security_modules(self):
+        """Initialize IDS, DNS Monitor, Flow Tracker, Threat Intel, Anomaly, SET Defense."""
+
+        # Intrusion Detection System
+        self._ids = IntrusionDetectionSystem()
+        self._ids.security_event.connect(self._on_security_event)
+        self._ids.security_event.connect(self._window.security_view.add_event)
+
+        # DNS Monitor
+        self._dns_monitor = DNSMonitor()
+        self._dns_monitor.dns_stats_updated.connect(self._on_dns_stats)
+        self._dns_monitor.dns_query_logged.connect(self._window.dns_view.add_query)
+
+        # Flow Tracker
+        self._flow_tracker = FlowTracker()
+        self._flow_tracker.flow_stats_updated.connect(self._on_flow_stats)
+
+        # Threat Intelligence
+        self._threat_intel = ThreatIntelligence()
+        self._threat_intel.threat_alert.connect(self._on_security_event)
+        self._threat_intel.threat_alert.connect(self._window.security_view.add_event)
+        self._threat_intel.threat_scored.connect(self._window.security_view.update_threat_score)
+
+        # Anomaly Detector
+        self._anomaly = AnomalyDetector()
+        self._anomaly.anomaly_detected.connect(self._on_security_event)
+        self._anomaly.anomaly_detected.connect(self._window.security_view.add_event)
+
+        # SET Defense
+        self._set_defense = SETDefense()
+        self._set_defense.set_defense_alert.connect(self._on_set_defense_event)
+        self._set_defense.set_defense_alert.connect(self._window.set_defense_view.add_event)
+        self._set_defense.set_defense_alert.connect(self._window.security_view.add_event)
+
+        # Wire packet capture to security modules
+        self._capture_worker.raw_packet_data.connect(self._ids.process_packet)
+        self._capture_worker.raw_packet_data.connect(self._flow_tracker.process_packet)
+        self._capture_worker.raw_packet_data.connect(self._set_defense.process_packet)
+
+        # Wire DNS packets
+        self._capture_worker.dns_packet.connect(self._dns_monitor.process_dns)
+        self._capture_worker.dns_packet.connect(
+            lambda pkt: self._threat_intel.check_domain(
+                pkt.get("dns_query", ""), pkt.get("src", "")
+            )
+        )
+        self._capture_worker.dns_packet.connect(self._set_defense.check_dns_query)
+
+        # Wire DNS monitor anomalies to security view
+        self._dns_monitor.dns_stats_updated.connect(
+            lambda stats: self._anomaly.update_metric(
+                "dns_rate", stats.get("queries_per_min", 0)
+            )
+        )
+
+        # Wire flow stats to SET defense for C2 beaconing detection
+        self._flow_tracker.flow_stats_updated.connect(self._set_defense.check_flows)
+
+    @Slot(dict)
+    def _on_security_event(self, event: dict):
+        """Handle security events from IDS, threat intel, anomaly detector."""
+        self._alert_engine.check_security_event(event)
+
+    @Slot(dict)
+    def _on_set_defense_event(self, event: dict):
+        """Handle SET defense events."""
+        self._alert_engine.check_security_event(event)
+
+    @Slot(dict)
+    def _on_dns_stats(self, stats: dict):
+        """Handle DNS monitor stats updates."""
+        self._window.dns_view.update_stats(stats)
+        self._window.dashboard_view.update_dns_stats(stats)
+
+    @Slot(dict)
+    def _on_flow_stats(self, stats: dict):
+        """Handle flow tracker stats updates."""
+        self._window.dashboard_view.update_flow_stats(stats)
+
+        # Feed anomaly detector with packet rate
+        if hasattr(self, "_anomaly"):
+            self._anomaly.update_metric("packet_rate", stats.get("total_packets", 0))
 
     # ── Alerts ─────────────────────────────────────────────────
 

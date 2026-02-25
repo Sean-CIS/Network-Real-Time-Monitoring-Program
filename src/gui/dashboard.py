@@ -1,4 +1,4 @@
-"""Enhanced NOC-style dashboard with world map, topology, gauges, and charts."""
+"""Enhanced NOC-style dashboard with real Leaflet.js map, vis.js topology, security summary."""
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -38,10 +38,16 @@ class DashboardView(QWidget):
         self._card_connections = StatCard("Connections", "0")
         self._card_destinations = StatCard("Destinations", "0")
         self._card_alerts = StatCard("Active Alerts", "0")
+        self._card_threat_level = StatCard("Threat Level", "LOW")
+        self._card_sec_events = StatCard("Sec Events", "0")
+        self._card_dns_queries = StatCard("DNS Queries", "0")
+        self._card_active_flows = StatCard("Active Flows", "0")
 
         for card in (self._card_download, self._card_upload, self._card_latency,
                      self._card_devices, self._card_connections,
-                     self._card_destinations, self._card_alerts):
+                     self._card_destinations, self._card_alerts,
+                     self._card_threat_level, self._card_sec_events,
+                     self._card_dns_queries, self._card_active_flows):
             top_row.addWidget(card)
 
         layout.addLayout(top_row)
@@ -230,3 +236,15 @@ class DashboardView(QWidget):
             msg = a.get("message", "")
             texts.append(f"[{sev}] {msg}")
         self._alert_ticker.setText("  |  ".join(texts))
+
+    # ── Security summary updates ──────────────────────────────
+
+    def update_security_summary(self, total_events: int, threat_level: str):
+        self._card_sec_events.set_value(str(total_events))
+        self._card_threat_level.set_value(threat_level)
+
+    def update_dns_stats(self, stats: dict):
+        self._card_dns_queries.set_value(str(stats.get("total_queries", 0)))
+
+    def update_flow_stats(self, stats: dict):
+        self._card_active_flows.set_value(str(stats.get("active_flows", 0)))

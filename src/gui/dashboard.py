@@ -15,7 +15,9 @@ from PySide6.QtWidgets import (
 
 from src.gui.widgets.gauge import CircularGauge
 from src.gui.widgets.live_chart import LiveChart
+from src.gui.widgets.mascot_widget import MascotWidget
 from src.gui.widgets.stat_card import StatCard
+from src.gui.widgets.table_helpers import configure_table, set_item_with_tooltip
 from src.gui.widgets.topology_map import TopologyMapWidget
 from src.gui.widgets.world_map import WorldMapWidget
 
@@ -141,7 +143,6 @@ class DashboardView(QWidget):
         self._dest_table.setColumnCount(3)
         self._dest_table.setHorizontalHeaderLabels(["Country", "Connections", "City"])
         self._dest_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self._dest_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self._dest_table.setStyleSheet(
             """
             QTableWidget {
@@ -157,6 +158,7 @@ class DashboardView(QWidget):
         )
         self._dest_table.setAlternatingRowColors(True)
         self._dest_table.setMaximumHeight(200)
+        configure_table(self._dest_table)
         dest_layout.addWidget(self._dest_table)
 
         bottom_splitter.addWidget(gauges_frame)
@@ -165,14 +167,20 @@ class DashboardView(QWidget):
         bottom_splitter.setSizes([300, 400, 300])
         layout.addWidget(bottom_splitter, stretch=2)
 
-        # ── Row 4: Alert ticker ───────────────────────────────
+        # ── Row 4: Alert ticker + Mascot ──────────────────────
+        bottom_row = QHBoxLayout()
         self._alert_ticker = QLabel("No recent alerts")
         self._alert_ticker.setStyleSheet(
             "QLabel { background-color: #313244; color: #f9e2af; "
             "padding: 6px 12px; border-radius: 4px; font-size: 11px; }"
         )
         self._alert_ticker.setFixedHeight(28)
-        layout.addWidget(self._alert_ticker)
+        bottom_row.addWidget(self._alert_ticker, stretch=1)
+
+        # Mascot widget in the bottom-right corner
+        self._mascot = MascotWidget()
+        bottom_row.addWidget(self._mascot)
+        layout.addLayout(bottom_row)
 
     # ── Public API ────────────────────────────────────────────
 
@@ -183,6 +191,10 @@ class DashboardView(QWidget):
     @property
     def topology_map(self) -> TopologyMapWidget:
         return self._topology_map
+
+    @property
+    def mascot(self) -> MascotWidget:
+        return self._mascot
 
     def update_bandwidth_summary(self, speed_down: float, speed_up: float):
         if speed_down >= 1_000_000:
@@ -200,8 +212,8 @@ class DashboardView(QWidget):
             self._card_upload.set_value(f"{speed_up:.0f} B/s")
 
         self._bandwidth_chart.add_data_point([speed_down / 1000, speed_up / 1000])
-        self._gauge_download.set_value(speed_down / 1_000_000)
-        self._gauge_upload.set_value(speed_up / 1_000_000)
+        self._gauge_download.set_value(speed_down / 1_000_000, raw_bytes=speed_down)
+        self._gauge_upload.set_value(speed_up / 1_000_000, raw_bytes=speed_up)
 
     def update_latency_summary(self, avg_ms: float):
         self._card_latency.set_value(f"{avg_ms:.1f} ms")

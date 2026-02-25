@@ -8,6 +8,15 @@ from datetime import datetime
 from PySide6.QtCore import QObject, Signal
 
 
+# ── Well-known public DNS resolvers (NEVER trigger alerts) ─────
+WHITELISTED_DNS_IPS = frozenset({
+    "8.8.8.8", "8.8.4.4",              # Google DNS
+    "1.1.1.1", "1.0.0.1",              # Cloudflare
+    "208.67.222.222", "208.67.220.220", # OpenDNS
+    "9.9.9.9", "149.112.112.112",      # Quad9
+})
+
+
 class IntrusionDetectionSystem(QObject):
     """Analyzes packets for intrusion patterns and emits security events."""
 
@@ -16,6 +25,12 @@ class IntrusionDetectionSystem(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._lock = threading.Lock()
+
+        # Local machine IP(s) — set externally when discovery detects them
+        self._local_ips: set[str] = set()
+
+        # Whether a discovery scan is currently active
+        self._scan_active = False
 
         # Sliding window trackers
         self._port_scans: dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
@@ -55,6 +70,16 @@ class IntrusionDetectionSystem(QObject):
             if hasattr(self, attr):
                 setattr(self, attr, val)
 
+    def set_local_ips(self, ips: set[str]):
+        """Set the local machine's IP addresses for self-scan suppression."""
+        with self._lock:
+            self._local_ips = set(ips)
+
+    def set_scan_active(self, active: bool):
+        """Call when discovery/port scan starts or stops."""
+        with self._lock:
+            self._scan_active = active
+
     def process_packet(self, pkt_info: dict):
         """Process a DPI-enriched packet dict for threat detection."""
         try:
@@ -77,38 +102,46 @@ class IntrusionDetectionSystem(QObject):
         flags = info.get("tcp_flags", "")
         length = info.get("length", 0)
 
+        # ── Global whitelist: skip ALL rules for whitelisted DNS IPs ──
+        if src_ip in WHITELISTED_DNS_IPS or dst_ip in WHITELISTED_DNS_IPS:
+            return
+
         with self._lock:
             # ── Rule 1: Port Scan Detection ──────────────────────
             if src_ip and dst_port:
-                tracker = self._port_scans[src_ip]
-                tracker.append((now, dst_port))
-                self._port_scan_unique[src_ip].add(dst_port)
-                self._prune_window(tracker, now, 60)
-                # Rebuild unique set after pruning
-                self._port_scan_unique[src_ip] = set(p for _, p in tracker)
-                unique_ports = len(self._port_scan_unique[src_ip])
-                if unique_ports > self._port_scan_critical:
-                    self._emit_locked("port_scan", "critical", "Port Scan Detected",
-                               f"{src_ip} probed {unique_ports} ports in 60s",
-                               src_ip, dst_ip, src_port, dst_port,
-                               f"Unique ports: {unique_ports}", "Block source IP")
-                elif unique_ports > self._port_scan_threshold:
-                    self._emit_locked("port_scan", "warning", "Port Scan Detected",
-                               f"{src_ip} probed {unique_ports} ports in 60s",
-                               src_ip, dst_ip, src_port, dst_port,
-                               f"Unique ports: {unique_ports}", "Monitor source IP")
+                # Suppress when local machine is scanning during discovery
+                if not (self._scan_active and src_ip in self._local_ips):
+                    tracker = self._port_scans[src_ip]
+                    tracker.append((now, dst_port))
+                    self._port_scan_unique[src_ip].add(dst_port)
+                    self._prune_window(tracker, now, 60)
+                    # Rebuild unique set after pruning
+                    self._port_scan_unique[src_ip] = set(p for _, p in tracker)
+                    unique_ports = len(self._port_scan_unique[src_ip])
+                    if unique_ports > self._port_scan_critical:
+                        self._emit_locked("port_scan", "critical", "Port Scan Detected",
+                                   f"{src_ip} probed {unique_ports} ports in 60s",
+                                   src_ip, dst_ip, src_port, dst_port,
+                                   f"Unique ports: {unique_ports}", "Block source IP")
+                    elif unique_ports > self._port_scan_threshold:
+                        self._emit_locked("port_scan", "warning", "Port Scan Detected",
+                                   f"{src_ip} probed {unique_ports} ports in 60s",
+                                   src_ip, dst_ip, src_port, dst_port,
+                                   f"Unique ports: {unique_ports}", "Monitor source IP")
 
             # ── Rule 2: Network Sweep Detection ──────────────────
             if src_ip and dst_ip:
-                tracker = self._net_sweeps[src_ip]
-                tracker.append((now, dst_ip))
-                self._prune_window(tracker, now, 60)
-                unique_ips = len(set(ip for _, ip in tracker))
-                if unique_ips > self._net_sweep_threshold:
-                    self._emit_locked("net_sweep", "warning", "Network Sweep Detected",
-                               f"{src_ip} contacted {unique_ips} unique IPs in 60s",
-                               src_ip, "", src_port, 0,
-                               f"Unique targets: {unique_ips}", "Investigate source")
+                # Suppress when local machine is scanning during discovery
+                if not (self._scan_active and src_ip in self._local_ips):
+                    tracker = self._net_sweeps[src_ip]
+                    tracker.append((now, dst_ip))
+                    self._prune_window(tracker, now, 60)
+                    unique_ips = len(set(ip for _, ip in tracker))
+                    if unique_ips > self._net_sweep_threshold:
+                        self._emit_locked("net_sweep", "warning", "Network Sweep Detected",
+                                   f"{src_ip} contacted {unique_ips} unique IPs in 60s",
+                                   src_ip, "", src_port, 0,
+                                   f"Unique targets: {unique_ips}", "Investigate source")
 
             # ── Rule 3: ARP Spoofing Detection ───────────────────
             if app_protocol == "ARP":

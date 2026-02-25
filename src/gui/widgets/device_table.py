@@ -5,6 +5,8 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
 )
 
+from src.gui.widgets.table_helpers import configure_table, set_item_with_tooltip
+
 
 class DeviceTable(QTableWidget):
     """A sortable table for displaying discovered network devices."""
@@ -20,7 +22,6 @@ class DeviceTable(QTableWidget):
         self.setSortingEnabled(True)
         self.setSelectionBehavior(QTableWidget.SelectRows)
         self.setAlternatingRowColors(True)
-        self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.setStyleSheet(
             """
             QTableWidget {
@@ -44,6 +45,7 @@ class DeviceTable(QTableWidget):
             }
             """
         )
+        configure_table(self)
         self.cellClicked.connect(self._on_cell_clicked)
 
     def _on_cell_clicked(self, row: int, _col: int):
@@ -55,11 +57,11 @@ class DeviceTable(QTableWidget):
         self.setSortingEnabled(False)
         self.setRowCount(len(devices))
         for row, dev in enumerate(devices):
-            self.setItem(row, 0, QTableWidgetItem(dev.get("ip", "")))
-            self.setItem(row, 1, QTableWidgetItem(dev.get("mac", "")))
-            self.setItem(row, 2, QTableWidgetItem(dev.get("hostname", "")))
-            self.setItem(row, 3, QTableWidgetItem(dev.get("os_info", "")))
-            self.setItem(row, 4, QTableWidgetItem(dev.get("vendor", "")))
+            set_item_with_tooltip(self, row, 0, QTableWidgetItem(dev.get("ip", "")))
+            set_item_with_tooltip(self, row, 1, QTableWidgetItem(dev.get("mac", "")))
+            set_item_with_tooltip(self, row, 2, QTableWidgetItem(dev.get("hostname", "")))
+            set_item_with_tooltip(self, row, 3, QTableWidgetItem(dev.get("os_info", "")))
+            set_item_with_tooltip(self, row, 4, QTableWidgetItem(dev.get("vendor", "")))
 
             status = "Online" if dev.get("is_online") else "Offline"
             status_item = QTableWidgetItem(status)
@@ -67,7 +69,7 @@ class DeviceTable(QTableWidget):
                 status_item.setForeground(Qt.green)
             else:
                 status_item.setForeground(Qt.red)
-            self.setItem(row, 5, status_item)
+            set_item_with_tooltip(self, row, 5, status_item)
 
-            self.setItem(row, 6, QTableWidgetItem(dev.get("last_seen", "")))
+            set_item_with_tooltip(self, row, 6, QTableWidgetItem(dev.get("last_seen", "")))
         self.setSortingEnabled(True)

@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 
 from src.gui.widgets.live_chart import LiveChart
 from src.gui.widgets.stat_card import StatCard
+from src.gui.widgets.table_helpers import configure_table, set_item_with_tooltip
 
 
 _CATEGORY_COLORS = {
@@ -82,9 +83,9 @@ class SETDefenseView(QWidget):
         self._category_table.setColumnCount(3)
         self._category_table.setHorizontalHeaderLabels(["Category", "Events", "Severity"])
         self._category_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self._category_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self._category_table.setMaximumHeight(200)
         self._apply_table_style(self._category_table)
+        configure_table(self._category_table)
 
         # Pre-populate categories
         categories = ["phishing", "credential_leak", "malware_payload",
@@ -113,8 +114,8 @@ class SETDefenseView(QWidget):
         self._events_table.setHorizontalHeaderLabels(columns)
         self._events_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._events_table.setAlternatingRowColors(True)
-        self._events_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self._apply_table_style(self._events_table)
+        configure_table(self._events_table)
         layout.addWidget(self._events_table, stretch=1)
 
         self._total_events = 0
@@ -199,6 +200,6 @@ class SETDefenseView(QWidget):
                     "INFO": "#89b4fa", "LOW": "#a6e3a1",
                 }
                 item.setForeground(QColor(sev_colors.get(text, "#cdd6f4")))
-            self._events_table.setItem(row, col, item)
+            set_item_with_tooltip(self._events_table, row, col, item)
 
         self._events_table.scrollToBottom()

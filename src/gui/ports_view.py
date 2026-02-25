@@ -10,6 +10,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.gui.widgets.table_helpers import configure_table, set_item_with_tooltip
+
 
 class PortsView(QWidget):
     def __init__(self, parent=None):
@@ -52,7 +54,6 @@ class PortsView(QWidget):
         self._table.setSortingEnabled(True)
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setAlternatingRowColors(True)
-        self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self._table.setStyleSheet(
             """
             QTableWidget {
@@ -69,6 +70,7 @@ class PortsView(QWidget):
             QTableWidget::item:alternate { background-color: #181825; }
             """
         )
+        configure_table(self._table)
         layout.addWidget(self._table, stretch=1)
 
     @property
@@ -93,11 +95,11 @@ class PortsView(QWidget):
         self._table.setSortingEnabled(False)
         self._table.setRowCount(len(ports))
         for row, p in enumerate(ports):
-            self._table.setItem(row, 0, QTableWidgetItem(str(p.get("port", ""))))
-            self._table.setItem(row, 1, QTableWidgetItem(p.get("protocol", "tcp")))
+            set_item_with_tooltip(self._table, row, 0, QTableWidgetItem(str(p.get("port", ""))))
+            set_item_with_tooltip(self._table, row, 1, QTableWidgetItem(p.get("protocol", "tcp")))
             state = p.get("state", "")
             state_item = QTableWidgetItem(state)
-            self._table.setItem(row, 2, state_item)
-            self._table.setItem(row, 3, QTableWidgetItem(p.get("service", "")))
-            self._table.setItem(row, 4, QTableWidgetItem(p.get("version", "")))
+            set_item_with_tooltip(self._table, row, 2, state_item)
+            set_item_with_tooltip(self._table, row, 3, QTableWidgetItem(p.get("service", "")))
+            set_item_with_tooltip(self._table, row, 4, QTableWidgetItem(p.get("version", "")))
         self._table.setSortingEnabled(True)

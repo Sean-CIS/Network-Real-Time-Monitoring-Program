@@ -1,3 +1,4 @@
+import socket
 import sys
 from collections import defaultdict
 
@@ -156,10 +157,19 @@ class NetworkMonitorApp:
         if not self._discovery_worker.isRunning():
             network = get("discovery", "network", "192.168.1.0/24")
             self._discovery_worker.set_network(network)
+            # Tell IDS to suppress self-scan alerts
+            if hasattr(self, "_ids"):
+                self._ids.set_scan_active(True)
+            # Mascot → scanning state
+            self._window.dashboard_view.mascot.set_state("scanning")
             self._discovery_worker.start()
 
     @Slot(list)
     def _on_discovery_complete(self, devices: list):
+        # Turn off scan suppression
+        if hasattr(self, "_ids"):
+            self._ids.set_scan_active(False)
+
         all_devices = db.get_all_devices()
         self._window.devices_view.update_devices(all_devices)
         self._alert_engine.check_devices(devices)
@@ -168,6 +178,10 @@ class NetworkMonitorApp:
 
         # Update topology map
         self._window.dashboard_view.topology_map.set_devices(all_devices)
+
+        # Update mascot device count + go back to idle
+        self._window.dashboard_view.mascot.set_device_count(online)
+        self._window.dashboard_view.mascot.set_state("idle")
 
     # ── Connections Monitor ───────────────────────────────────
 
@@ -226,11 +240,20 @@ class NetworkMonitorApp:
                 "port_scanner", "default_ports", "1-1024"
             )
             self._port_worker.set_target(target, ports)
+            # Suppress IDS alerts during port scan
+            if hasattr(self, "_ids"):
+                self._ids.set_scan_active(True)
+            # Mascot → scanning state
+            self._window.dashboard_view.mascot.set_state("scanning")
             self._port_worker.start()
 
     @Slot(list)
     def _on_port_scan_complete(self, results: list):
+        if hasattr(self, "_ids"):
+            self._ids.set_scan_active(False)
         self._window.ports_view.update_results(results)
+        # Mascot → back to idle
+        self._window.dashboard_view.mascot.set_state("idle")
 
     # ── Packet Capture ─────────────────────────────────────────
 
@@ -314,10 +337,17 @@ class NetworkMonitorApp:
         # Wire flow stats to SET defense for C2 beaconing detection
         self._flow_tracker.flow_stats_updated.connect(self._set_defense.check_flows)
 
+        # Detect local IPs and tell IDS so it can suppress self-scan alerts
+        self._ids.set_local_ips(self._detect_local_ips())
+
     @Slot(dict)
     def _on_security_event(self, event: dict):
         """Handle security events from IDS, threat intel, anomaly detector."""
         self._alert_engine.check_security_event(event)
+        # Trigger mascot alert state on warning/critical
+        severity = event.get("severity", "").lower()
+        if severity in ("warning", "critical"):
+            self._window.dashboard_view.mascot.set_state("alert")
 
     @Slot(dict)
     def _on_set_defense_event(self, event: dict):
@@ -366,6 +396,27 @@ class NetworkMonitorApp:
 
     def _clear_alerts(self):
         self._window.alerts_view.clear_alerts()
+
+    # ── Utility ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _detect_local_ips() -> set[str]:
+        """Detect all local IP addresses on this machine."""
+        local_ips = {"127.0.0.1"}
+        try:
+            import psutil
+            for addrs in psutil.net_if_addrs().values():
+                for addr in addrs:
+                    if addr.family == socket.AF_INET:
+                        local_ips.add(addr.address)
+        except ImportError:
+            try:
+                hostname = socket.gethostname()
+                for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+                    local_ips.add(info[4][0])
+            except OSError:
+                pass
+        return local_ips
 
     # ── Error handling ─────────────────────────────────────────
 

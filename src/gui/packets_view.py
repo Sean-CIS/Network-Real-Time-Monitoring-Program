@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 
 from src.gui.widgets.live_chart import LiveChart
 from src.gui.widgets.stat_card import StatCard
+from src.gui.widgets.table_helpers import configure_table, set_item_with_tooltip
 
 
 # Threat flag colors
@@ -102,9 +103,6 @@ class PacketsView(QWidget):
         self._table.setHorizontalHeaderLabels(columns)
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setAlternatingRowColors(True)
-        self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        # Give Info column more space
-        self._table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
         self._table.setStyleSheet(
             """
             QTableWidget {
@@ -119,6 +117,7 @@ class PacketsView(QWidget):
             QTableWidget::item:alternate { background-color: #181825; }
             """
         )
+        configure_table(self._table)
         layout.addWidget(self._table, stretch=1)
 
         self._packet_count = 0
@@ -179,26 +178,26 @@ class PacketsView(QWidget):
             row = self._table.rowCount()
 
         self._table.insertRow(row)
-        self._table.setItem(row, 0, QTableWidgetItem(pkt.get("time", "")))
-        self._table.setItem(row, 1, QTableWidgetItem(pkt.get("src", "")))
-        self._table.setItem(row, 2, QTableWidgetItem(pkt.get("dst", "")))
-        self._table.setItem(row, 3, QTableWidgetItem(proto))
+        set_item_with_tooltip(self._table, row, 0, QTableWidgetItem(pkt.get("time", "")))
+        set_item_with_tooltip(self._table, row, 1, QTableWidgetItem(pkt.get("src", "")))
+        set_item_with_tooltip(self._table, row, 2, QTableWidgetItem(pkt.get("dst", "")))
+        set_item_with_tooltip(self._table, row, 3, QTableWidgetItem(proto))
 
         # App protocol with color
         app_item = QTableWidgetItem(app_proto)
         color = _APP_PROTO_COLORS.get(app_proto, "#cdd6f4")
         app_item.setForeground(QColor(color))
-        self._table.setItem(row, 4, app_item)
+        set_item_with_tooltip(self._table, row, 4, app_item)
 
-        self._table.setItem(row, 5, QTableWidgetItem(str(pkt.get("length", 0))))
-        self._table.setItem(row, 6, QTableWidgetItem(pkt.get("info", "")))
+        set_item_with_tooltip(self._table, row, 5, QTableWidgetItem(str(pkt.get("length", 0))))
+        set_item_with_tooltip(self._table, row, 6, QTableWidgetItem(pkt.get("info", "")))
 
         # Threat flags
         flags_text = ", ".join(threat_flags) if threat_flags else ""
         flags_item = QTableWidgetItem(flags_text)
         if threat_flags:
             flags_item.setForeground(QColor(_THREAT_COLOR))
-        self._table.setItem(row, 7, flags_item)
+        set_item_with_tooltip(self._table, row, 7, flags_item)
 
         self._table.scrollToBottom()
 

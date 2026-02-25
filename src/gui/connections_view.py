@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.gui.widgets.stat_card import StatCard
+from src.gui.widgets.table_helpers import configure_table, set_item_with_tooltip
 
 
 class ConnectionsView(QWidget):
@@ -54,7 +55,6 @@ class ConnectionsView(QWidget):
         self._table.setSortingEnabled(True)
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setAlternatingRowColors(True)
-        self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self._table.setStyleSheet(
             """
             QTableWidget {
@@ -69,6 +69,7 @@ class ConnectionsView(QWidget):
             QTableWidget::item:alternate { background-color: #181825; }
             """
         )
+        configure_table(self._table)
         layout.addWidget(self._table, stretch=1)
 
         self._geoip_data: dict[str, dict] = {}
@@ -105,11 +106,11 @@ class ConnectionsView(QWidget):
             if status == "ESTABLISHED":
                 established += 1
 
-            self._table.setItem(row, 0, QTableWidgetItem(process))
-            self._table.setItem(row, 1, QTableWidgetItem(proto))
-            self._table.setItem(row, 2, QTableWidgetItem(service))
-            self._table.setItem(row, 3, QTableWidgetItem(local))
-            self._table.setItem(row, 4, QTableWidgetItem(remote))
+            set_item_with_tooltip(self._table, row, 0, QTableWidgetItem(process))
+            set_item_with_tooltip(self._table, row, 1, QTableWidgetItem(proto))
+            set_item_with_tooltip(self._table, row, 2, QTableWidgetItem(service))
+            set_item_with_tooltip(self._table, row, 3, QTableWidgetItem(local))
+            set_item_with_tooltip(self._table, row, 4, QTableWidgetItem(remote))
 
             status_item = QTableWidgetItem(status)
             if status == "ESTABLISHED":
@@ -118,10 +119,10 @@ class ConnectionsView(QWidget):
                 status_item.setForeground(Qt.yellow)
             elif status == "LISTEN":
                 status_item.setForeground(Qt.cyan)
-            self._table.setItem(row, 5, status_item)
+            set_item_with_tooltip(self._table, row, 5, status_item)
 
-            self._table.setItem(row, 6, QTableWidgetItem(country))
-            self._table.setItem(row, 7, QTableWidgetItem(city))
+            set_item_with_tooltip(self._table, row, 6, QTableWidgetItem(country))
+            set_item_with_tooltip(self._table, row, 7, QTableWidgetItem(city))
 
         self._table.setSortingEnabled(True)
 

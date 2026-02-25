@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 
 from src.gui.widgets.live_chart import LiveChart
 from src.gui.widgets.stat_card import StatCard
+from src.gui.widgets.table_helpers import configure_table, set_item_with_tooltip
 
 
 # Severity colors
@@ -74,9 +75,9 @@ class SecurityView(QWidget):
         self._threat_table.setColumnCount(3)
         self._threat_table.setHorizontalHeaderLabels(["IP Address", "Score", "Flags"])
         self._threat_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self._threat_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self._threat_table.setMaximumHeight(200)
         self._apply_table_style(self._threat_table)
+        configure_table(self._threat_table)
         threat_panel.addWidget(self._threat_table)
         mid_row.addLayout(threat_panel, stretch=1)
 
@@ -93,8 +94,8 @@ class SecurityView(QWidget):
         self._events_table.setHorizontalHeaderLabels(columns)
         self._events_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._events_table.setAlternatingRowColors(True)
-        self._events_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self._apply_table_style(self._events_table)
+        configure_table(self._events_table)
         layout.addWidget(self._events_table, stretch=1)
 
         # Counters
@@ -180,11 +181,9 @@ class SecurityView(QWidget):
             item = QTableWidgetItem(str(text))
             if col == 1:  # severity column
                 color = _SEV_COLORS.get(severity, "#cdd6f4")
-                item.setForeground(Qt.GlobalColor.white)
-                item.setBackground(Qt.GlobalColor.transparent)
                 from PySide6.QtGui import QColor
                 item.setForeground(QColor(color))
-            self._events_table.setItem(row, col, item)
+            set_item_with_tooltip(self._events_table, row, col, item)
 
         self._events_table.scrollToBottom()
 

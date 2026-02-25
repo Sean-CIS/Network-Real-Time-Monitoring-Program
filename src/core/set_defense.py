@@ -12,6 +12,7 @@ from datetime import datetime
 
 from PySide6.QtCore import QObject, Signal
 
+from src.core.ids import WHITELISTED_DNS_IPS
 from src.utils import db
 
 # ── Popular domains to monitor for typosquatting ──────────────
@@ -118,10 +119,15 @@ class SETDefense(QObject):
         """Check DNS query for phishing (typosquatting) and DNS poisoning."""
         domain = dns_info.get("query_name", dns_info.get("dns_query", ""))
         src_ip = dns_info.get("src_ip", dns_info.get("src", ""))
+        dst_ip = dns_info.get("dst_ip", dns_info.get("dst", ""))
         response = dns_info.get("dns_response", dns_info.get("response_ips", ""))
         rcode = dns_info.get("response_code", dns_info.get("dns_rcode", ""))
 
         if not domain:
+            return
+
+        # Skip all checks if traffic involves a whitelisted DNS resolver
+        if src_ip in WHITELISTED_DNS_IPS or dst_ip in WHITELISTED_DNS_IPS:
             return
 
         # ── Anti-Phishing: Typosquatting Detection ────────────
@@ -140,6 +146,10 @@ class SETDefense(QObject):
         dst_ip = pkt_info.get("dst", "")
         dst_port = pkt_info.get("dst_port", 0)
         threat_flags = pkt_info.get("threat_flags", [])
+
+        # Skip all checks if traffic involves a whitelisted DNS resolver
+        if src_ip in WHITELISTED_DNS_IPS or dst_ip in WHITELISTED_DNS_IPS:
+            return
 
         with self._lock:
             # ── Credential Leak Detection ─────────────────────────

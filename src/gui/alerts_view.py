@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.gui.widgets.stat_card import StatCard
+from src.gui.widgets.table_helpers import configure_table, set_item_with_tooltip
 
 
 class AlertsView(QWidget):
@@ -49,7 +50,6 @@ class AlertsView(QWidget):
         self._table.setSortingEnabled(True)
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setAlternatingRowColors(True)
-        self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self._table.setStyleSheet(
             """
             QTableWidget {
@@ -64,6 +64,7 @@ class AlertsView(QWidget):
             QTableWidget::item:alternate { background-color: #181825; }
             """
         )
+        configure_table(self._table)
         layout.addWidget(self._table, stretch=1)
 
     @property
@@ -76,7 +77,7 @@ class AlertsView(QWidget):
 
         counts = {"critical": 0, "warning": 0, "info": 0}
         for row, a in enumerate(alerts):
-            self._table.setItem(row, 0, QTableWidgetItem(a.get("timestamp", "")))
+            set_item_with_tooltip(self._table, row, 0, QTableWidgetItem(a.get("timestamp", "")))
 
             severity = a.get("severity", "info")
             sev_item = QTableWidgetItem(severity.upper())
@@ -89,11 +90,11 @@ class AlertsView(QWidget):
             else:
                 sev_item.setForeground(Qt.cyan)
                 counts["info"] += 1
-            self._table.setItem(row, 1, sev_item)
+            set_item_with_tooltip(self._table, row, 1, sev_item)
 
-            self._table.setItem(row, 2, QTableWidgetItem(a.get("alert_type", "")))
-            self._table.setItem(row, 3, QTableWidgetItem(a.get("message", "")))
-            self._table.setItem(row, 4, QTableWidgetItem(a.get("source", "")))
+            set_item_with_tooltip(self._table, row, 2, QTableWidgetItem(a.get("alert_type", "")))
+            set_item_with_tooltip(self._table, row, 3, QTableWidgetItem(a.get("message", "")))
+            set_item_with_tooltip(self._table, row, 4, QTableWidgetItem(a.get("source", "")))
 
         self._table.setSortingEnabled(True)
         self._card_total.set_value(str(len(alerts)))

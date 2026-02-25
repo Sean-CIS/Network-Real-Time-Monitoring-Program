@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 
 from src.gui.widgets.live_chart import LiveChart
 from src.gui.widgets.stat_card import StatCard
+from src.gui.widgets.table_helpers import configure_table, set_item_with_tooltip
 
 
 class DNSView(QWidget):
@@ -63,9 +64,9 @@ class DNSView(QWidget):
         self._top_domains_table.setColumnCount(3)
         self._top_domains_table.setHorizontalHeaderLabels(["Domain", "Count", "Status"])
         self._top_domains_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self._top_domains_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self._top_domains_table.setMaximumHeight(200)
         self._apply_table_style(self._top_domains_table)
+        configure_table(self._top_domains_table)
         top_panel.addWidget(self._top_domains_table)
         mid_row.addLayout(top_panel, stretch=1)
 
@@ -82,8 +83,8 @@ class DNSView(QWidget):
         self._query_table.setHorizontalHeaderLabels(columns)
         self._query_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._query_table.setAlternatingRowColors(True)
-        self._query_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self._apply_table_style(self._query_table)
+        configure_table(self._query_table)
         layout.addWidget(self._query_table, stretch=1)
 
         self._max_display = 500
@@ -138,7 +139,7 @@ class DNSView(QWidget):
                 item.setForeground(QColor("#f38ba8"))
             elif col == 5 and rcode == "NXDOMAIN":
                 item.setForeground(QColor("#f9e2af"))
-            self._query_table.setItem(row, col, item)
+            set_item_with_tooltip(self._query_table, row, col, item)
 
         self._query_table.scrollToBottom()
 

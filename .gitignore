@@ -13,6 +13,8 @@ venv/
 env/
 .env
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.log
 .idea/

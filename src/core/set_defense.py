@@ -5,6 +5,7 @@ DNS poisoning, rogue APs, and C2 beaconing patterns.
 """
 
 import re
+import threading
 import time
 from collections import defaultdict, deque
 from datetime import datetime
@@ -58,12 +59,13 @@ POWERSHELL_PATTERNS = [
 
 
 def _levenshtein(s1: str, s2: str) -> int:
-    """Compute Levenshtein edit distance between two strings."""
+    """Compute Levenshtein edit distance between two strings (iterative DP)."""
+    # Ensure s1 is the longer string for space optimization
     if len(s1) < len(s2):
-        return _levenshtein(s2, s1)
+        s1, s2 = s2, s1
     if len(s2) == 0:
         return len(s1)
-    prev_row = range(len(s2) + 1)
+    prev_row = list(range(len(s2) + 1))
     for i, c1 in enumerate(s1):
         curr_row = [i + 1]
         for j, c2 in enumerate(s2):
@@ -82,6 +84,7 @@ class SETDefense(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._lock = threading.Lock()
         self._cooldowns: dict[str, float] = {}
         self._cooldown_s = 120.0
 
@@ -122,11 +125,13 @@ class SETDefense(QObject):
             return
 
         # ── Anti-Phishing: Typosquatting Detection ────────────
-        self._check_typosquatting(domain, src_ip)
+        with self._lock:
+            self._check_typosquatting(domain, src_ip)
 
         # ── DNS Poisoning Detection ───────────────────────────
         if response and rcode != "NXDOMAIN":
-            self._check_dns_poisoning(domain, response, src_ip)
+            with self._lock:
+                self._check_dns_poisoning(domain, response, src_ip)
 
     def process_packet(self, pkt_info: dict):
         """Process DPI-enriched packet for SE attack indicators."""
@@ -136,25 +141,26 @@ class SETDefense(QObject):
         dst_port = pkt_info.get("dst_port", 0)
         threat_flags = pkt_info.get("threat_flags", [])
 
-        # ── Credential Leak Detection ─────────────────────────
-        if "cleartext_auth" in threat_flags:
-            self._detect_credential_leak(pkt_info)
+        with self._lock:
+            # ── Credential Leak Detection ─────────────────────────
+            if "cleartext_auth" in threat_flags:
+                self._detect_credential_leak(pkt_info)
 
-        # ── Payload/Malware Delivery Detection ────────────────
-        if app_protocol == "HTTP":
-            self._check_payload_delivery(pkt_info)
+            # ── Payload/Malware Delivery Detection ────────────────
+            if app_protocol == "HTTP":
+                self._check_payload_delivery(pkt_info)
 
-        # ── DHCP Rogue AP Detection ───────────────────────────
-        if app_protocol == "DHCP":
-            self._check_rogue_dhcp(pkt_info)
+            # ── DHCP Rogue AP Detection ───────────────────────────
+            if app_protocol == "DHCP":
+                self._check_rogue_dhcp(pkt_info)
 
-        # ── ARP Gateway MAC tracking ─────────────────────────
-        if app_protocol == "ARP":
-            self._check_gateway_arp(pkt_info)
+            # ── ARP Gateway MAC tracking ─────────────────────────
+            if app_protocol == "ARP":
+                self._check_gateway_arp(pkt_info)
 
-        # ── C2 Beaconing Detection ────────────────────────────
-        if src_ip and dst_ip and dst_port:
-            self._track_beaconing(src_ip, dst_ip, dst_port)
+            # ── C2 Beaconing Detection ────────────────────────────
+            if src_ip and dst_ip and dst_port:
+                self._track_beaconing(src_ip, dst_ip, dst_port)
 
     def check_flows(self, flow_stats: dict):
         """Check flow statistics for SE attack patterns."""
@@ -408,5 +414,5 @@ class SETDefense(QObject):
                 description=description, src_ip=src_ip, dst_ip=dst_ip,
                 evidence=evidence, recommended_action=recommended_action,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            self._stats["db_errors"] = self._stats.get("db_errors", 0) + 1

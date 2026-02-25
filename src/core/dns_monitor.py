@@ -1,13 +1,28 @@
 """DNS Intelligence Monitor — tracks all DNS activity and detects anomalies."""
 
 import math
+import threading
 import time
-from collections import defaultdict, deque
+from collections import defaultdict, deque, OrderedDict
 from datetime import datetime
 
 from PySide6.QtCore import QObject, Signal, QTimer
 
 from src.utils import db
+
+
+# Bounded OrderedDict that evicts oldest entries when full
+class _BoundedDict(OrderedDict):
+    def __init__(self, maxlen: int = 10000):
+        super().__init__()
+        self._maxlen = maxlen
+
+    def __setitem__(self, key, value):
+        if key in self:
+            self.move_to_end(key)
+        super().__setitem__(key, value)
+        while len(self) > self._maxlen:
+            self.popitem(last=False)
 
 
 class DNSMonitor(QObject):
@@ -21,8 +36,9 @@ class DNSMonitor(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._lock = threading.Lock()
         self._queries: deque = deque(maxlen=10000)
-        self._domain_counts: dict[str, int] = defaultdict(int)
+        self._domain_counts = _BoundedDict(maxlen=10000)
         self._source_queries: dict[str, deque] = defaultdict(lambda: deque())
         self._source_nx: dict[str, int] = defaultdict(int)
         self._source_total: dict[str, int] = defaultdict(int)
@@ -31,6 +47,7 @@ class DNSMonitor(QObject):
         self._total_queries = 0
         self._total_nx = 0
         self._total_suspicious = 0
+        self._error_counts: dict[str, int] = defaultdict(int)
 
         # Stats emission timer
         self._stats_timer = QTimer(self)
@@ -50,32 +67,33 @@ class DNSMonitor(QObject):
         response = dns_info.get("dns_response", "")
         now = time.time()
 
-        self._total_queries += 1
-        self._domain_counts[query] += 1
-        self._query_types[qtype] += 1
+        with self._lock:
+            self._total_queries += 1
+            self._domain_counts[query] = self._domain_counts.get(query, 0) + 1
+            self._query_types[qtype] += 1
 
-        if src_ip:
-            self._source_queries[src_ip].append(now)
-            self._source_total[src_ip] += 1
-            self._unique_domains_per_source[src_ip].add(query)
-            # Prune old entries
-            tracker = self._source_queries[src_ip]
-            while tracker and now - tracker[0] > 60:
-                tracker.popleft()
-
-        # Check for NXDOMAIN
-        is_nx = rcode == "NXDOMAIN"
-        if is_nx:
-            self._total_nx += 1
             if src_ip:
-                self._source_nx[src_ip] += 1
+                self._source_queries[src_ip].append(now)
+                self._source_total[src_ip] += 1
+                self._unique_domains_per_source[src_ip].add(query)
+                # Prune old entries (keep last 60s)
+                tracker = self._source_queries[src_ip]
+                while tracker and now - tracker[0] > 60:
+                    tracker.popleft()
 
-        # Anomaly detection
-        is_suspicious = self._check_suspicious(query, qtype, src_ip, is_nx)
-        if is_suspicious:
-            self._total_suspicious += 1
+            # Check for NXDOMAIN
+            is_nx = rcode == "NXDOMAIN"
+            if is_nx:
+                self._total_nx += 1
+                if src_ip:
+                    self._source_nx[src_ip] += 1
 
-        # Build log entry
+            # Anomaly detection
+            is_suspicious = self._check_suspicious_locked(query, qtype, src_ip, is_nx)
+            if is_suspicious:
+                self._total_suspicious += 1
+
+        # Build log entry (outside lock)
         entry = {
             "timestamp": datetime.now().isoformat(),
             "src_ip": src_ip,
@@ -86,7 +104,9 @@ class DNSMonitor(QObject):
             "is_suspicious": is_suspicious,
         }
 
-        self._queries.append(entry)
+        with self._lock:
+            self._queries.append(entry)
+
         self.dns_query_logged.emit(entry)
 
         # Persist to DB (batch every 10th query to reduce I/O)
@@ -97,11 +117,11 @@ class DNSMonitor(QObject):
                     response_ips=response, response_code=rcode or "NOERROR",
                     is_suspicious=is_suspicious,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                self._error_counts["db_write"] += 1
 
-    def _check_suspicious(self, query: str, qtype: str, src_ip: str, is_nx: bool) -> bool:
-        """Check if a DNS query is suspicious."""
+    def _check_suspicious_locked(self, query: str, qtype: str, src_ip: str, is_nx: bool) -> bool:
+        """Check if a DNS query is suspicious. Must be called with lock held."""
         flags = []
 
         # Long domain name (possible tunneling)
@@ -156,22 +176,35 @@ class DNSMonitor(QObject):
 
     def _emit_stats(self):
         """Emit aggregated DNS statistics."""
-        # Top domains
-        top_domains = sorted(self._domain_counts.items(), key=lambda x: x[1], reverse=True)[:30]
+        # Snapshot under lock
+        with self._lock:
+            top_domains = sorted(self._domain_counts.items(), key=lambda x: x[1], reverse=True)[:30]
+            total_queries = self._total_queries
+            unique_domains = len(self._domain_counts)
+            total_nx = self._total_nx
+            total_suspicious = self._total_suspicious
+            query_types = dict(self._query_types)
+            queries_snapshot = list(self._queries)
 
-        # Query rate (queries in last 60s)
+        # Query rate (queries in last 60s) — computed outside lock
         now = time.time()
-        recent = sum(1 for q in self._queries if now - time.mktime(
-            datetime.fromisoformat(q["timestamp"]).timetuple()) < 60)
+        recent = 0
+        for q in queries_snapshot:
+            try:
+                ts = datetime.fromisoformat(q["timestamp"])
+                if now - time.mktime(ts.timetuple()) < 60:
+                    recent += 1
+            except (ValueError, KeyError):
+                pass
         query_rate = recent / 60.0 if recent > 0 else 0
 
         stats = {
-            "total_queries": self._total_queries,
-            "unique_domains": len(self._domain_counts),
-            "nx_domains": self._total_nx,
-            "suspicious": self._total_suspicious,
+            "total_queries": total_queries,
+            "unique_domains": unique_domains,
+            "nx_domains": total_nx,
+            "suspicious": total_suspicious,
             "query_rate": query_rate,
-            "query_types": dict(self._query_types),
+            "query_types": query_types,
             "top_domains": top_domains,
         }
         self.dns_stats_updated.emit(stats)

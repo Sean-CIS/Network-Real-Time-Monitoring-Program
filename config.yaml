@@ -22,7 +22,7 @@ latency:
 discovery:
   enabled: true
   auto_scan_interval_s: 300       # Seconds between automatic scans
-  network: "192.168.1.0/24"       # Network range to scan
+  network: "auto"                  # Auto-detect local network (or set CIDR e.g. "192.168.1.0/24")
   nmap_os_detection: false        # Requires root/admin privileges
 
 port_scanner:

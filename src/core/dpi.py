@@ -61,8 +61,10 @@ def analyze_packet(pkt) -> dict:
 
     try:
         _analyze_layers(pkt, result)
-    except Exception:
-        pass
+    except (Exception, KeyboardInterrupt) as e:
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        # DPI parse errors are expected for malformed packets; silently continue
 
     return result
 

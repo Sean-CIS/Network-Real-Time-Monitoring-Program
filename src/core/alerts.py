@@ -1,3 +1,4 @@
+import threading
 import time
 from datetime import datetime
 
@@ -13,14 +14,15 @@ class AlertEngine(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._lock = threading.Lock()
         self._bandwidth_threshold_mbps = 100.0
         self._latency_threshold_ms = 200.0
         self._device_offline_timeout_s = 60.0
         self._cooldown_period_s = 300.0
         self._cooldowns: dict[str, float] = {}
         self._known_devices: set[str] = set()
-        self._repeat_counts: dict[str, int] = {}  # track repeat alerts per key
-        self._max_repeats = 3  # suppress after this many identical alerts
+        self._repeat_counts: dict[str, int] = {}
+        self._max_repeats = 3
 
     def configure(self, bandwidth_mbps: float = 100.0, latency_ms: float = 200.0,
                   offline_timeout_s: float = 60.0, cooldown_s: float = 300.0):
@@ -134,15 +136,16 @@ class AlertEngine(QObject):
         key = f"{alert_type}:{source}"
         now = time.time()
 
-        # Cooldown check
-        if now - self._cooldowns.get(key, 0) < self._cooldown_period_s:
-            return
-        self._cooldowns[key] = now
+        with self._lock:
+            # Cooldown check
+            if now - self._cooldowns.get(key, 0) < self._cooldown_period_s:
+                return
+            self._cooldowns[key] = now
 
-        # Repeat suppression: after N identical alerts, suppress until cooldown resets
-        self._repeat_counts[key] = self._repeat_counts.get(key, 0) + 1
-        if self._repeat_counts[key] > self._max_repeats:
-            return
+            # Repeat suppression: after N identical alerts, suppress until cooldown resets
+            self._repeat_counts[key] = self._repeat_counts.get(key, 0) + 1
+            if self._repeat_counts[key] > self._max_repeats:
+                return
 
         alert = {
             "timestamp": datetime.now().isoformat(),
@@ -160,8 +163,8 @@ class AlertEngine(QObject):
                 from plyer import notification
                 notification.notify(
                     title=f"Network Monitor - {severity.upper()}",
-                    message=message,
+                    message=message[:200],
                     timeout=5,
                 )
             except Exception:
-                pass
+                pass  # Desktop notification is best-effort

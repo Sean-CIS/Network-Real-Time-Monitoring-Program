@@ -1,5 +1,7 @@
-"""Packet capture with Deep Packet Inspection integration."""
+"""Packet capture with Deep Packet Inspection integration, backpressure, and error tracking."""
 
+import threading
+from collections import defaultdict
 from datetime import datetime
 
 from PySide6.QtCore import Signal, QThread
@@ -17,16 +19,23 @@ class PacketCaptureWorker(QThread):
     proto_stats = Signal(float, float, float)  # tcp_ps, udp_ps, other_ps
     app_proto_stats = Signal(dict)     # Per-app-protocol counts
 
+    # Backpressure: if packet rate exceeds this, sample GUI emissions
+    _GUI_THROTTLE_PPS = 5000
+
     def __init__(self, bpf_filter: str = "", parent=None):
         super().__init__(parent)
         self._filter = bpf_filter
         self._running = False
         self._sniffer = None
+        self._lock = threading.Lock()
         self._tcp_count = 0
         self._udp_count = 0
         self._other_count = 0
+        self._total_packets = 0
+        self._gui_skip_counter = 0
         self._app_proto_counts: dict[str, int] = {}
         self._last_stats_time = None
+        self._error_counts: dict[str, int] = defaultdict(int)
 
     def set_filter(self, bpf_filter: str):
         self._filter = bpf_filter
@@ -35,14 +44,30 @@ class PacketCaptureWorker(QThread):
         try:
             from scapy.all import AsyncSniffer, IP, TCP, UDP, ARP
         except ImportError:
-            self.capture_status.emit("scapy not installed")
+            self.capture_status.emit("scapy not installed — packet capture unavailable")
+            return
+
+        # Check if scapy can access network interfaces
+        try:
+            from scapy.all import get_if_list
+            ifaces = get_if_list()
+            if not ifaces:
+                self.capture_status.emit(
+                    "No network interfaces found — install Npcap (npcap.com) on Windows"
+                )
+                return
+        except Exception as e:
+            self.capture_status.emit(f"Cannot access network interfaces: {e}")
             return
 
         self._running = True
-        self._tcp_count = 0
-        self._udp_count = 0
-        self._other_count = 0
-        self._app_proto_counts = {}
+        with self._lock:
+            self._tcp_count = 0
+            self._udp_count = 0
+            self._other_count = 0
+            self._total_packets = 0
+            self._gui_skip_counter = 0
+            self._app_proto_counts = {}
         self._last_stats_time = datetime.now()
         self.capture_status.emit("Capturing...")
 
@@ -67,20 +92,25 @@ class PacketCaptureWorker(QThread):
                     info["protocol"] = "TCP"
                     info["tcp_flags"] = str(pkt[TCP].flags)
                     info["info"] = f":{pkt[TCP].sport} -> :{pkt[TCP].dport} [{pkt[TCP].flags}]"
-                    self._tcp_count += 1
+                    with self._lock:
+                        self._tcp_count += 1
                 elif UDP in pkt:
                     info["protocol"] = "UDP"
                     info["info"] = f":{pkt[UDP].sport} -> :{pkt[UDP].dport}"
-                    self._udp_count += 1
+                    with self._lock:
+                        self._udp_count += 1
                 else:
-                    self._other_count += 1
+                    with self._lock:
+                        self._other_count += 1
             elif ARP in pkt:
                 info["protocol"] = "ARP"
                 info["src"] = pkt[ARP].psrc
                 info["dst"] = pkt[ARP].pdst
-                self._other_count += 1
+                with self._lock:
+                    self._other_count += 1
             else:
-                self._other_count += 1
+                with self._lock:
+                    self._other_count += 1
 
             # ── Deep Packet Inspection ────────────────────────
             try:
@@ -114,59 +144,100 @@ class PacketCaptureWorker(QThread):
                 # Track app protocol stats
                 app_proto = dpi_result.get("app_protocol", "")
                 if app_proto:
-                    self._app_proto_counts[app_proto] = self._app_proto_counts.get(app_proto, 0) + 1
+                    with self._lock:
+                        self._app_proto_counts[app_proto] = self._app_proto_counts.get(app_proto, 0) + 1
 
                 # Update info line with DPI details if available
                 dpi_details = dpi_result.get("app_details", "")
                 if dpi_details:
                     info["info"] = dpi_details
 
-            except Exception:
+            except Exception as e:
+                self._error_counts["dpi"] += 1
                 info["app_protocol"] = ""
                 info["app_details"] = ""
                 info["threat_flags"] = []
 
-            # Emit enriched packet to GUI
-            self.packet_captured.emit(info)
-
-            # Emit raw data to IDS/flow tracker/SET defense
+            # ── Backpressure: always emit to security modules, throttle GUI ──
             self.raw_packet_data.emit(info)
 
-            # Emit DNS-specific data to DNS monitor
+            # DNS-specific data to DNS monitor
             if info.get("app_protocol") == "DNS" and info.get("dns_query"):
                 self.dns_packet.emit(info)
 
-            # Emit stats every second
+            # GUI emission with backpressure
+            with self._lock:
+                self._total_packets += 1
+                self._gui_skip_counter += 1
+
+            # Calculate current PPS for throttling
             now = datetime.now()
             elapsed = (now - self._last_stats_time).total_seconds()
+            if elapsed > 0.1:
+                current_pps = self._total_packets / max(elapsed, 0.1)
+                if current_pps > self._GUI_THROTTLE_PPS:
+                    # Sample: emit every Nth packet to GUI
+                    sample_rate = max(1, int(current_pps / self._GUI_THROTTLE_PPS))
+                    if self._gui_skip_counter % sample_rate != 0:
+                        # Skip GUI emission, but still process for security
+                        pass
+                    else:
+                        self.packet_captured.emit(info)
+                else:
+                    self.packet_captured.emit(info)
+            else:
+                self.packet_captured.emit(info)
+
+            # Emit stats every second
             if elapsed >= 1.0:
+                with self._lock:
+                    tcp = self._tcp_count
+                    udp = self._udp_count
+                    other = self._other_count
+                    self._tcp_count = 0
+                    self._udp_count = 0
+                    self._other_count = 0
+                    self._total_packets = 0
+                    proto_counts = dict(self._app_proto_counts)
+
+                # Guard against division by zero
+                safe_elapsed = max(elapsed, 0.1)
                 self.proto_stats.emit(
-                    self._tcp_count / elapsed,
-                    self._udp_count / elapsed,
-                    self._other_count / elapsed,
+                    tcp / safe_elapsed,
+                    udp / safe_elapsed,
+                    other / safe_elapsed,
                 )
-                self._tcp_count = 0
-                self._udp_count = 0
-                self._other_count = 0
                 self._last_stats_time = now
 
-                # Emit app protocol stats
-                if self._app_proto_counts:
-                    self.app_proto_stats.emit(dict(self._app_proto_counts))
+                if proto_counts:
+                    self.app_proto_stats.emit(proto_counts)
 
         kwargs = {"prn": process_packet, "store": False}
         if self._filter:
             kwargs["filter"] = self._filter
 
-        self._sniffer = AsyncSniffer(**kwargs)
-        self._sniffer.start()
+        try:
+            self._sniffer = AsyncSniffer(**kwargs)
+            self._sniffer.start()
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "npcap" in err_msg or "winpcap" in err_msg or "permission" in err_msg:
+                self.capture_status.emit(
+                    "Packet capture requires Npcap on Windows — download from npcap.com"
+                )
+            else:
+                self.capture_status.emit(f"Capture failed: {e}")
+            return
 
         # Keep thread alive while sniffer runs
         while self._running:
             self.msleep(100)
 
         if self._sniffer:
-            self._sniffer.stop()
+            try:
+                self._sniffer.stop()
+            except Exception:
+                pass
             self._sniffer = None
         self.capture_status.emit("Stopped")
 

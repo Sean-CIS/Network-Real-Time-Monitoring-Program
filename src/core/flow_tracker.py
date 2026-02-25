@@ -1,5 +1,7 @@
 """Network Flow Tracker — tracks conversations, top talkers, protocol distribution."""
 
+import heapq
+import threading
 import time
 from collections import defaultdict
 from datetime import datetime
@@ -54,9 +56,11 @@ class FlowTracker(QObject):
     flow_stats_updated = Signal(dict)
 
     IDLE_TIMEOUT = 30.0  # seconds before a flow is considered idle
+    MAX_FLOWS = 50000    # hard limit on tracked flows
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._lock = threading.Lock()
         self._flows: dict[tuple, Flow] = {}
         self._total_new = 0
         self._total_closed = 0
@@ -86,89 +90,98 @@ class FlowTracker(QObject):
 
         now = time.time()
 
-        if key_fwd in self._flows:
-            flow = self._flows[key_fwd]
-            flow.bytes_sent += length
-            flow.packets += 1
-            flow.last_seen = now
-            if app_protocol and not flow.app_protocol:
+        with self._lock:
+            if key_fwd in self._flows:
+                flow = self._flows[key_fwd]
+                flow.bytes_sent += length
+                flow.packets += 1
+                flow.last_seen = now
+                if app_protocol and not flow.app_protocol:
+                    flow.app_protocol = app_protocol
+            elif key_rev in self._flows:
+                flow = self._flows[key_rev]
+                flow.bytes_recv += length
+                flow.packets += 1
+                flow.last_seen = now
+            else:
+                # Enforce flow limit — evict oldest idle flow if at capacity
+                if len(self._flows) >= self.MAX_FLOWS:
+                    oldest_key = min(self._flows, key=lambda k: self._flows[k].last_seen)
+                    del self._flows[oldest_key]
+                    self._total_closed += 1
+
+                flow = Flow(src_ip, dst_ip, src_port, dst_port, protocol)
+                flow.bytes_sent = length
+                flow.packets = 1
                 flow.app_protocol = app_protocol
-        elif key_rev in self._flows:
-            flow = self._flows[key_rev]
-            flow.bytes_recv += length
-            flow.packets += 1
-            flow.last_seen = now
-        else:
-            flow = Flow(src_ip, dst_ip, src_port, dst_port, protocol)
-            flow.bytes_sent = length
-            flow.packets = 1
-            flow.app_protocol = app_protocol
-            self._flows[key_fwd] = flow
-            self._total_new += 1
+                self._flows[key_fwd] = flow
+                self._total_new += 1
 
     def _emit_stats(self):
         """Compute and emit aggregated flow statistics."""
         now = time.time()
 
-        # Prune idle/closed flows
-        to_remove = []
-        for key, flow in self._flows.items():
-            if now - flow.last_seen > self.IDLE_TIMEOUT:
-                flow.state = "closed"
-                to_remove.append(key)
+        # Snapshot under lock
+        with self._lock:
+            # Prune idle/closed flows
+            to_remove = [key for key, flow in self._flows.items()
+                         if now - flow.last_seen > self.IDLE_TIMEOUT]
+            for key in to_remove:
+                del self._flows[key]
+                self._total_closed += 1
 
-        for key in to_remove:
-            del self._flows[key]
-            self._total_closed += 1
+            # Take snapshot
+            active_flows = [f.to_dict() for f in self._flows.values()]
+            total_new = self._total_new
+            total_closed = self._total_closed
 
-        active_flows = list(self._flows.values())
-
-        # ── Top Talkers (by host) ────────────────────────────
+        # ── Top Talkers (by host) — computed outside lock ────
         host_bytes: dict[str, dict] = defaultdict(
             lambda: {"bytes_sent": 0, "bytes_recv": 0, "flow_count": 0, "protocol": ""}
         )
         for flow in active_flows:
-            h = host_bytes[flow.src_ip]
-            h["bytes_sent"] += flow.bytes_sent
-            h["bytes_recv"] += flow.bytes_recv
+            h = host_bytes[flow["src_ip"]]
+            h["bytes_sent"] += flow["bytes_sent"]
+            h["bytes_recv"] += flow["bytes_recv"]
             h["flow_count"] += 1
-            if flow.app_protocol:
-                h["protocol"] = flow.app_protocol
+            if flow["app_protocol"]:
+                h["protocol"] = flow["app_protocol"]
 
-            h2 = host_bytes[flow.dst_ip]
-            h2["bytes_recv"] += flow.bytes_sent
-            h2["bytes_sent"] += flow.bytes_recv
+            h2 = host_bytes[flow["dst_ip"]]
+            h2["bytes_recv"] += flow["bytes_sent"]
+            h2["bytes_sent"] += flow["bytes_recv"]
             h2["flow_count"] += 1
 
-        top_talkers = sorted(
-            [{"ip": ip, **data, "total": data["bytes_sent"] + data["bytes_recv"]}
-             for ip, data in host_bytes.items()],
-            key=lambda x: x["total"], reverse=True
-        )[:20]
+        # Use heapq.nlargest for O(n log k) instead of full sort
+        talker_items = [
+            {"ip": ip, **data, "total": data["bytes_sent"] + data["bytes_recv"]}
+            for ip, data in host_bytes.items()
+        ]
+        top_talkers = heapq.nlargest(20, talker_items, key=lambda x: x["total"])
 
         # ── Top Flows ────────────────────────────────────────
-        top_flows = sorted(
-            [flow.to_dict() for flow in active_flows],
-            key=lambda x: x["bytes_sent"] + x["bytes_recv"], reverse=True
-        )[:20]
+        top_flows = heapq.nlargest(
+            20, active_flows,
+            key=lambda x: x["bytes_sent"] + x["bytes_recv"]
+        )
 
         # ── Protocol Distribution ────────────────────────────
         proto_bytes: dict[str, int] = defaultdict(int)
         for flow in active_flows:
-            proto = flow.app_protocol or flow.protocol
-            proto_bytes[proto] += flow.total_bytes
+            proto = flow["app_protocol"] or flow["protocol"]
+            proto_bytes[proto] += flow["bytes_sent"] + flow["bytes_recv"]
 
         # ── Unique external IPs ──────────────────────────────
         external_ips = set()
         for flow in active_flows:
-            for ip in (flow.src_ip, flow.dst_ip):
+            for ip in (flow["src_ip"], flow["dst_ip"]):
                 if ip and not ip.startswith(("10.", "192.168.", "172.16.", "127.")):
                     external_ips.add(ip)
 
         stats = {
             "active_flows": len(active_flows),
-            "total_new": self._total_new,
-            "total_closed": self._total_closed,
+            "total_new": total_new,
+            "total_closed": total_closed,
             "top_talkers": top_talkers,
             "top_flows": top_flows,
             "protocol_distribution": dict(proto_bytes),

@@ -5,17 +5,34 @@ from datetime import datetime
 from typing import Optional
 
 
-_DB_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "network_monitor.db",
-)
+def _resolve_db_path() -> str:
+    """Determine database path with fallback for restricted directories."""
+    primary = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "network_monitor.db",
+    )
+    # Test if we can write to primary location
+    try:
+        parent = os.path.dirname(primary)
+        if os.access(parent, os.W_OK):
+            return primary
+    except OSError:
+        pass
+
+    # Fallback to user home directory
+    fallback_dir = os.path.join(os.path.expanduser("~"), ".network_monitor")
+    os.makedirs(fallback_dir, exist_ok=True)
+    return os.path.join(fallback_dir, "network_monitor.db")
+
+
+_DB_PATH = _resolve_db_path()
 
 _local = threading.local()
 
 
 def get_connection() -> sqlite3.Connection:
     if not hasattr(_local, "conn") or _local.conn is None:
-        _local.conn = sqlite3.connect(_DB_PATH)
+        _local.conn = sqlite3.connect(_DB_PATH, timeout=5)
         _local.conn.row_factory = sqlite3.Row
         _local.conn.execute("PRAGMA journal_mode=WAL")
     return _local.conn
@@ -164,12 +181,19 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_bandwidth_ts ON bandwidth_history(timestamp);
         CREATE INDEX IF NOT EXISTS idx_latency_ts ON latency_history(timestamp);
         CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_alerts_type ON alerts(alert_type);
         CREATE INDEX IF NOT EXISTS idx_geoip_cached ON geoip_cache(cached_at);
         CREATE INDEX IF NOT EXISTS idx_connlog_ts ON connection_log(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_connlog_remote ON connection_log(remote_ip);
         CREATE INDEX IF NOT EXISTS idx_security_ts ON security_events(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_security_rule ON security_events(rule_id);
+        CREATE INDEX IF NOT EXISTS idx_security_severity ON security_events(severity);
         CREATE INDEX IF NOT EXISTS idx_dns_ts ON dns_log(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_dns_query ON dns_log(query_name);
+        CREATE INDEX IF NOT EXISTS idx_dns_src ON dns_log(src_ip);
         CREATE INDEX IF NOT EXISTS idx_flow_ts ON flow_summary(timestamp);
         CREATE INDEX IF NOT EXISTS idx_set_defense_ts ON set_defense_events(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_set_defense_cat ON set_defense_events(category);
     """
     )
     conn.commit()

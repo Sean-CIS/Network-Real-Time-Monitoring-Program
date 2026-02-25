@@ -1,6 +1,7 @@
 """Statistical Anomaly Detection — learns traffic baselines and detects deviations."""
 
 import math
+import threading
 import time
 from datetime import datetime
 
@@ -21,6 +22,8 @@ class AnomalyDetector(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._lock = threading.Lock()
+
         # Current metric values (updated by data feeds)
         self._current: dict[str, float] = {
             "bandwidth_bps": 0,
@@ -31,7 +34,7 @@ class AnomalyDetector(QObject):
         }
 
         # Baseline statistics (EMA-based)
-        self._baselines: dict[str, dict] = {}  # metric → {mean, variance, sample_count}
+        self._baselines: dict[str, dict] = {}
         self._load_baselines()
 
         # Cooldowns to prevent alert spam
@@ -45,84 +48,111 @@ class AnomalyDetector(QObject):
         self._check_timer.start()
 
     def _load_baselines(self):
-        """Load persisted baselines from database."""
+        """Load persisted baselines from database with validation."""
         for metric in self._current:
             saved = db.get_baseline(metric)
             if saved:
-                self._baselines[metric] = {
-                    "mean": saved.get("mean", 0),
-                    "variance": saved.get("std_dev", 0) ** 2,
-                    "sample_count": saved.get("sample_count", 0),
-                }
+                mean = saved.get("mean", 0)
+                std_dev = saved.get("std_dev", 0)
+                sample_count = saved.get("sample_count", 0)
+
+                # Validate loaded values — reject NaN, Inf, negative variance
+                if (math.isfinite(mean) and math.isfinite(std_dev)
+                        and std_dev >= 0 and sample_count >= 0):
+                    self._baselines[metric] = {
+                        "mean": mean,
+                        "variance": std_dev ** 2,
+                        "sample_count": sample_count,
+                    }
+                else:
+                    self._baselines[metric] = {"mean": 0, "variance": 0, "sample_count": 0}
             else:
                 self._baselines[metric] = {"mean": 0, "variance": 0, "sample_count": 0}
 
     def update_bandwidth(self, data: dict):
         """Update bandwidth metric from BandwidthMonitor data."""
         total_bps = sum(v.get("speed_down", 0) + v.get("speed_up", 0) for v in data.values())
-        self._current["bandwidth_bps"] = total_bps
+        with self._lock:
+            self._current["bandwidth_bps"] = total_bps
         self._update_baseline("bandwidth_bps", total_bps)
 
     def update_connections(self, connections: list[dict]):
         """Update connection metrics from ConnectionsMonitor data."""
-        self._current["connection_count"] = len(connections)
-        self._update_baseline("connection_count", len(connections))
-
+        count = len(connections)
         # Count unique external IPs
         external = set()
         for c in connections:
             rip = c.get("remote_ip", "")
             if rip and not rip.startswith(("10.", "192.168.", "172.16.", "127.")):
                 external.add(rip)
-        self._current["unique_external_ips"] = len(external)
-        self._update_baseline("unique_external_ips", len(external))
+        ext_count = len(external)
+
+        with self._lock:
+            self._current["connection_count"] = count
+            self._current["unique_external_ips"] = ext_count
+        self._update_baseline("connection_count", count)
+        self._update_baseline("unique_external_ips", ext_count)
 
     def update_dns_rate(self, rate: float):
         """Update DNS query rate metric."""
-        self._current["dns_query_rate"] = rate
+        with self._lock:
+            self._current["dns_query_rate"] = rate
         self._update_baseline("dns_query_rate", rate)
 
     def update_packet_rate(self, rate: float):
         """Update packet rate metric."""
-        self._current["packet_rate"] = rate
+        with self._lock:
+            self._current["packet_rate"] = rate
         self._update_baseline("packet_rate", rate)
 
     def _update_baseline(self, metric: str, value: float):
         """Update EMA baseline for a metric."""
-        b = self._baselines[metric]
-        b["sample_count"] += 1
-        n = b["sample_count"]
+        with self._lock:
+            b = self._baselines[metric]
+            b["sample_count"] += 1
+            n = b["sample_count"]
 
-        if n == 1:
-            b["mean"] = value
-            b["variance"] = 0
+            if n == 1:
+                b["mean"] = value
+                b["variance"] = 0
+            else:
+                alpha = self.EMA_ALPHA
+                old_mean = b["mean"]
+                b["mean"] = (1 - alpha) * old_mean + alpha * value
+                diff = value - old_mean
+                b["variance"] = (1 - alpha) * b["variance"] + alpha * diff * (value - b["mean"])
+
+            # Persist every 50 samples
+            if n % 50 == 0:
+                std = math.sqrt(max(b["variance"], 0))
+                mean = b["mean"]
+                count = n
         else:
-            alpha = self.EMA_ALPHA
-            old_mean = b["mean"]
-            b["mean"] = (1 - alpha) * old_mean + alpha * value
-            # Online variance via Welford's adapted for EMA
-            diff = value - old_mean
-            b["variance"] = (1 - alpha) * b["variance"] + alpha * diff * (value - b["mean"])
+            return
 
-        # Persist every 50 samples
-        if n % 50 == 0:
-            std = math.sqrt(max(b["variance"], 0))
-            try:
-                db.upsert_baseline(metric, b["mean"], std, n)
-            except Exception:
-                pass
+        # DB write outside lock
+        try:
+            db.upsert_baseline(metric, mean, std, count)
+        except Exception:
+            pass
 
     def _check_anomalies(self):
         """Check all metrics for anomalies using z-score."""
-        for metric, value in self._current.items():
-            b = self._baselines.get(metric)
+        with self._lock:
+            current_snapshot = dict(self._current)
+            baselines_snapshot = {
+                k: dict(v) for k, v in self._baselines.items()
+            }
+
+        for metric, value in current_snapshot.items():
+            b = baselines_snapshot.get(metric)
             if not b or b["sample_count"] < self.MIN_SAMPLES:
                 continue
 
             mean = b["mean"]
             std = math.sqrt(max(b["variance"], 0))
             if std < 0.001:
-                continue  # Not enough variance to detect anomalies
+                continue
 
             z_score = (value - mean) / std
 
@@ -135,9 +165,11 @@ class AnomalyDetector(QObject):
                       z_score: float, anomaly_type: str):
         key = f"anomaly:{metric}:{anomaly_type}"
         now = time.time()
-        if now - self._cooldowns.get(key, 0) < self._cooldown_s:
-            return
-        self._cooldowns[key] = now
+
+        with self._lock:
+            if now - self._cooldowns.get(key, 0) < self._cooldown_s:
+                return
+            self._cooldowns[key] = now
 
         metric_labels = {
             "bandwidth_bps": "Bandwidth",
@@ -156,7 +188,7 @@ class AnomalyDetector(QObject):
             "title": f"Traffic Anomaly: {label} {anomaly_type.title()}",
             "description": (
                 f"{label} is {direction} baseline: current={value:.1f}, "
-                f"baseline={mean:.1f} ± {std:.1f}, z-score={z_score:.1f}"
+                f"baseline={mean:.1f} +/- {std:.1f}, z-score={z_score:.1f}"
             ),
             "src_ip": "",
             "dst_ip": "",
@@ -166,11 +198,12 @@ class AnomalyDetector(QObject):
 
     def get_baselines(self) -> dict:
         """Return current baseline statistics for display."""
-        result = {}
-        for metric, b in self._baselines.items():
-            result[metric] = {
-                "mean": b["mean"],
-                "std_dev": math.sqrt(max(b["variance"], 0)),
-                "sample_count": b["sample_count"],
-            }
+        with self._lock:
+            result = {}
+            for metric, b in self._baselines.items():
+                result[metric] = {
+                    "mean": b["mean"],
+                    "std_dev": math.sqrt(max(b["variance"], 0)),
+                    "sample_count": b["sample_count"],
+                }
         return result

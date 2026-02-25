@@ -1,7 +1,10 @@
 """Threat Intelligence Engine — IP/domain reputation scoring and threat alerting."""
 
 import ipaddress
+import math
+import threading
 import time
+from collections import defaultdict
 from datetime import datetime
 
 from PySide6.QtCore import QObject, Signal
@@ -18,13 +21,13 @@ SUSPICIOUS_PORTS = {
 MALWARE_C2_PORTS = {
     4444,   # Metasploit default
     50050,  # Cobalt Strike
-    8080,   # Empire / various
     443,    # HTTPS C2 (combined with other indicators)
     8443,   # Alt HTTPS C2
     1337,   # Leet / hacker convention
     31337,  # Back Orifice
     6667,   # IRC C2
     9001,   # Tor default
+    8080,   # Empire / various
 }
 
 SUSPICIOUS_TLDS = {
@@ -34,20 +37,11 @@ SUSPICIOUS_TLDS = {
 
 # Known scanner/research IP ranges (partial CIDRs)
 KNOWN_SCANNER_CIDRS = [
-    "71.6.135.0/24",    # BinaryEdge
-    "71.6.146.0/24",    # BinaryEdge
-    "71.6.167.0/24",    # BinaryEdge
-    "80.82.77.0/24",    # Censys
-    "80.82.78.0/24",    # Censys
-    "93.120.27.0/24",   # Censys
-    "66.240.192.0/18",  # Shodan
-    "198.20.69.0/24",   # Shodan
-    "198.20.70.0/24",   # Shodan
-    "198.20.99.0/24",   # Shodan
-    "162.142.125.0/24", # Censys
-    "167.248.133.0/24", # Censys
-    "167.94.138.0/24",  # Censys
-    "185.142.236.0/24", # Censys
+    "71.6.135.0/24", "71.6.146.0/24", "71.6.167.0/24",
+    "80.82.77.0/24", "80.82.78.0/24", "93.120.27.0/24",
+    "66.240.192.0/18", "198.20.69.0/24", "198.20.70.0/24",
+    "198.20.99.0/24", "162.142.125.0/24", "167.248.133.0/24",
+    "167.94.138.0/24", "185.142.236.0/24",
 ]
 
 # Known high-risk country codes (for scoring, not blocking)
@@ -79,15 +73,18 @@ class ThreatIntelligence(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._lock = threading.Lock()
         self._scores: dict[str, int] = {}
         self._score_details: dict[str, dict] = {}
         self._cooldowns: dict[str, float] = {}
         self._cooldown_s = 120.0
         self._geo_cache: dict[str, dict] = {}
+        self._error_counts: dict[str, int] = defaultdict(int)
 
     def set_geo_cache(self, cache: dict[str, dict]):
         """Update GeoIP cache reference."""
-        self._geo_cache = cache
+        with self._lock:
+            self._geo_cache = cache
 
     def check_connections(self, connections: list[dict]):
         """Score IPs from active connections."""
@@ -119,22 +116,33 @@ class ThreatIntelligence(QObject):
             score += 15
             reasons.append(f"Long domain name ({len(domain)} chars)")
 
-        # High entropy subdomain
+        # High entropy subdomain (actual Shannon entropy check)
         parts = domain.split(".")
-        if len(parts) > 2 and len(parts[0]) > 15:
+        if len(parts) > 2 and len(parts[0]) > 10:
+            entropy = self._shannon_entropy(parts[0])
+            if entropy > 3.5:
+                score += 15
+                reasons.append(f"High-entropy subdomain (entropy={entropy:.1f})")
+            elif len(parts[0]) > 15:
+                score += 10
+                reasons.append("Long subdomain")
+
+        # Many subdomains (possible tunneling)
+        if len(parts) > 5:
             score += 10
-            reasons.append("High-entropy subdomain")
+            reasons.append(f"Deep subdomain nesting ({len(parts)} levels)")
 
         if score >= 40:
-            self._emit_alert(
-                rule_id="threat_domain",
-                severity="warning",
-                title="Suspicious Domain Detected",
-                description=f"Domain {domain} scored {score}: {'; '.join(reasons)}",
-                src_ip=src_ip,
-                evidence=f"Score: {score}, Reasons: {', '.join(reasons)}",
-                recommended_action="Investigate DNS traffic and block if confirmed malicious",
-            )
+            with self._lock:
+                self._emit_alert_locked(
+                    rule_id="threat_domain",
+                    severity="warning",
+                    title="Suspicious Domain Detected",
+                    description=f"Domain {domain} scored {score}: {'; '.join(reasons)}",
+                    src_ip=src_ip,
+                    evidence=f"Score: {score}, Reasons: {', '.join(reasons)}",
+                    recommended_action="Investigate DNS traffic and block if confirmed malicious",
+                )
 
     def check_packet(self, pkt_info: dict):
         """Check packet for threat indicators."""
@@ -149,8 +157,9 @@ class ThreatIntelligence(QObject):
 
     def _score_ip(self, ip: str, remote_port: int = 0, direction: str = ""):
         """Calculate threat score for an IP address."""
-        if ip in self._scores:
-            return  # Already scored recently
+        with self._lock:
+            if ip in self._scores:
+                return
 
         score = 0
         reasons = []
@@ -164,43 +173,49 @@ class ThreatIntelligence(QObject):
                     reasons.append("Known scanner range")
                     break
         except ValueError:
-            pass
+            return
 
-        # Suspicious port
+        # Suspicious port — don't exclude 443 from C2 scoring
         if remote_port in SUSPICIOUS_PORTS:
             score += 30
             reasons.append(f"Suspicious port: {remote_port}")
-        elif remote_port in MALWARE_C2_PORTS and remote_port not in (443, 8080):
-            score += 20
-            reasons.append(f"Known C2 port: {remote_port}")
+        elif remote_port in MALWARE_C2_PORTS:
+            if remote_port in (443, 8080):
+                score += 10
+                reasons.append(f"C2-capable port: {remote_port} (common, lower confidence)")
+            else:
+                score += 20
+                reasons.append(f"Known C2 port: {remote_port}")
 
         # GeoIP-based scoring
-        geo = self._geo_cache.get(ip, {})
+        with self._lock:
+            geo = self._geo_cache.get(ip, {})
         country_code = geo.get("country_code", "")
         if country_code in HIGH_RISK_COUNTRIES:
             score += 15
             reasons.append(f"High-risk country: {country_code}")
 
-        # Cache the score
-        self._scores[ip] = min(score, 100)
-        self._score_details[ip] = {"score": score, "reasons": reasons, "country": country_code}
+        with self._lock:
+            self._scores[ip] = min(score, 100)
+            self._score_details[ip] = {"score": score, "reasons": reasons, "country": country_code}
 
         self.threat_scored.emit(ip, min(score, 100), self._score_details[ip])
 
-        # Alert if high score
         if score >= self.ALERT_THRESHOLD:
-            self._emit_alert(
-                rule_id="threat_ip",
-                severity="warning" if score < 80 else "critical",
-                title="High-Threat IP Detected",
-                description=f"IP {ip} scored {score}: {'; '.join(reasons)}",
-                src_ip=ip if direction == "inbound" else "",
-                dst_ip=ip if direction == "outbound" else "",
-                evidence=f"Score: {score}, Reasons: {', '.join(reasons)}",
-                recommended_action=f"Block IP {ip} at firewall",
-            )
+            with self._lock:
+                self._emit_alert_locked(
+                    rule_id="threat_ip",
+                    severity="warning" if score < 80 else "critical",
+                    title="High-Threat IP Detected",
+                    description=f"IP {ip} scored {score}: {'; '.join(reasons)}",
+                    src_ip=ip if direction == "inbound" else "",
+                    dst_ip=ip if direction == "outbound" else "",
+                    evidence=f"Score: {score}, Reasons: {', '.join(reasons)}",
+                    recommended_action=f"Block IP {ip} at firewall",
+                )
 
-    def _emit_alert(self, **kwargs):
+    def _emit_alert_locked(self, **kwargs):
+        """Emit alert with cooldown. Must be called with self._lock held."""
         now = time.time()
         key = f"{kwargs.get('rule_id', '')}:{kwargs.get('src_ip', '')}{kwargs.get('dst_ip', '')}"
         if now - self._cooldowns.get(key, 0) < self._cooldown_s:
@@ -213,9 +228,10 @@ class ThreatIntelligence(QObject):
 
     def get_overall_threat_level(self) -> int:
         """Return overall network threat level (0-100)."""
-        if not self._scores:
-            return 0
-        top_scores = sorted(self._scores.values(), reverse=True)[:10]
+        with self._lock:
+            if not self._scores:
+                return 0
+            top_scores = sorted(self._scores.values(), reverse=True)[:10]
         return min(100, int(sum(top_scores) / max(len(top_scores), 1)))
 
     @staticmethod
@@ -224,3 +240,14 @@ class ThreatIntelligence(QObject):
             return ipaddress.ip_address(ip).is_private
         except ValueError:
             return True
+
+    @staticmethod
+    def _shannon_entropy(s: str) -> float:
+        """Calculate Shannon entropy of a string."""
+        if not s:
+            return 0.0
+        freq = defaultdict(int)
+        for c in s:
+            freq[c] += 1
+        length = len(s)
+        return -sum((count / length) * math.log2(count / length) for count in freq.values())

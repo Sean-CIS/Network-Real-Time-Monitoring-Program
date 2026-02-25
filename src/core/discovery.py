@@ -89,34 +89,87 @@ class DiscoveryWorker(QThread):
             raise RuntimeError("scapy not installed")
 
     def _ping_sweep(self) -> list[dict]:
-        """Fallback: ping sweep when scapy/raw sockets unavailable."""
+        """Fallback: TCP connect scan when scapy/raw sockets unavailable."""
         import ipaddress
+        import shutil
 
         network = ipaddress.ip_network(self._network, strict=False)
         devices = []
-        param = "-n" if platform.system().lower() == "windows" else "-c"
 
-        for host in network.hosts():
-            host_str = str(host)
-            self.scan_status.emit(f"Pinging {host_str}...")
-            try:
-                result = subprocess.run(
-                    ["ping", param, "1", "-w", "500", host_str],
-                    capture_output=True,
-                    text=True,
-                    timeout=2,
-                )
-                if result.returncode == 0:
+        # Try icmplib first (pure Python ICMP, no ping binary needed)
+        try:
+            from icmplib import multiping
+            hosts = [str(h) for h in network.hosts()]
+            self.scan_status.emit(f"ICMP scanning {len(hosts)} hosts...")
+            results = multiping(hosts, count=1, timeout=1, privileged=False)
+            for result in results:
+                if result.is_alive:
                     devices.append({
-                        "ip": host_str,
+                        "ip": result.address,
                         "mac": "",
                         "hostname": "",
                         "vendor": "",
                         "os_info": "",
                         "is_online": True,
                     })
-            except (subprocess.TimeoutExpired, OSError):
-                continue
+            return devices
+        except ImportError:
+            pass
+        except Exception:
+            pass
+
+        # Try system ping if available
+        if shutil.which("ping"):
+            param = "-n" if platform.system().lower() == "windows" else "-c"
+            for host in network.hosts():
+                host_str = str(host)
+                self.scan_status.emit(f"Pinging {host_str}...")
+                try:
+                    result = subprocess.run(
+                        ["ping", param, "1", "-W", "1", host_str],
+                        capture_output=True, text=True, timeout=2,
+                    )
+                    if result.returncode == 0:
+                        devices.append({
+                            "ip": host_str,
+                            "mac": "",
+                            "hostname": "",
+                            "vendor": "",
+                            "os_info": "",
+                            "is_online": True,
+                        })
+                except (subprocess.TimeoutExpired, OSError):
+                    continue
+            return devices
+
+        # Last resort: TCP connect probe on common ports
+        self.scan_status.emit("No ping available, using TCP connect scan...")
+        common_ports = [22, 80, 443, 445, 8080, 3389]
+        for host in network.hosts():
+            host_str = str(host)
+            self.scan_status.emit(f"TCP probing {host_str}...")
+            for port in common_ports:
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(0.3)
+                    if sock.connect_ex((host_str, port)) == 0:
+                        devices.append({
+                            "ip": host_str,
+                            "mac": "",
+                            "hostname": "",
+                            "vendor": "",
+                            "os_info": "",
+                            "is_online": True,
+                        })
+                        sock.close()
+                        break  # Found one open port, device is alive
+                    sock.close()
+                except (OSError, socket.timeout):
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+                    continue
 
         return devices
 
@@ -190,32 +243,75 @@ class DiscoveryWorker(QThread):
     @staticmethod
     def _detect_os_by_ttl(ip: str) -> str:
         """Detect OS by analyzing ping TTL value."""
-        param = "-n" if platform.system().lower() == "windows" else "-c"
+        import shutil
+
+        # Try icmplib first (no ping binary needed)
         try:
-            result = subprocess.run(
-                ["ping", param, "1", "-W", "1", ip],
-                capture_output=True, text=True, timeout=3,
-            )
-            output = result.stdout.lower()
-            # Extract TTL from output
-            import re
-            ttl_match = re.search(r"ttl[=:](\d+)", output)
-            if ttl_match:
-                ttl = int(ttl_match.group(1))
-                if ttl <= 64:
-                    if ttl > 48:
-                        return "Linux/macOS"
-                    else:
-                        return "Linux (routed)"
-                elif ttl <= 128:
-                    if ttl > 112:
-                        return "Windows"
-                    else:
-                        return "Windows (routed)"
-                elif ttl <= 255:
-                    return "Network Equipment"
-        except (subprocess.TimeoutExpired, OSError, ValueError):
+            from icmplib import ping as icmp_ping
+            result = icmp_ping(ip, count=1, timeout=1, privileged=False)
+            if result.is_alive and result.rtts:
+                # icmplib doesn't expose TTL directly in unprivileged mode
+                # but we can try via raw response if available
+                pass
+        except (ImportError, Exception):
             pass
+
+        # Try system ping if available
+        if shutil.which("ping"):
+            param = "-n" if platform.system().lower() == "windows" else "-c"
+            try:
+                result = subprocess.run(
+                    ["ping", param, "1", "-W", "1", ip],
+                    capture_output=True, text=True, timeout=3,
+                )
+                output = result.stdout.lower()
+                import re
+                ttl_match = re.search(r"ttl[=:](\d+)", output)
+                if ttl_match:
+                    ttl = int(ttl_match.group(1))
+                    if ttl <= 64:
+                        if ttl > 48:
+                            return "Linux/macOS"
+                        else:
+                            return "Linux (routed)"
+                    elif ttl <= 128:
+                        if ttl > 112:
+                            return "Windows"
+                        else:
+                            return "Windows (routed)"
+                    elif ttl <= 255:
+                        return "Network Equipment"
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError, ValueError):
+                pass
+
+        # Try TCP connect fingerprinting as fallback
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            # If port 22 is open, likely Linux/server
+            if sock.connect_ex((ip, 22)) == 0:
+                sock.close()
+                return "Linux/Unix (SSH)"
+            sock.close()
+
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            # If port 3389 is open, likely Windows
+            if sock.connect_ex((ip, 3389)) == 0:
+                sock.close()
+                return "Windows (RDP)"
+            sock.close()
+
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            # If port 445 is open, likely Windows
+            if sock.connect_ex((ip, 445)) == 0:
+                sock.close()
+                return "Windows (SMB)"
+            sock.close()
+        except (OSError, socket.timeout):
+            pass
+
         return ""
 
 

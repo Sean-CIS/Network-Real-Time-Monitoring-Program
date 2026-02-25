@@ -112,8 +112,7 @@ class NetworkMonitorApp:
 
         # Feed anomaly detector
         if hasattr(self, "_anomaly"):
-            total_bps = total_down + total_up
-            self._anomaly.update_metric("bandwidth", total_bps)
+            self._anomaly.update_bandwidth(data)
 
     # ── Latency ────────────────────────────────────────────────
 
@@ -205,8 +204,7 @@ class NetworkMonitorApp:
 
         # Feed anomaly detector
         if hasattr(self, "_anomaly"):
-            self._anomaly.update_metric("connections", len(connections))
-            self._anomaly.update_metric("unique_external_ips", len(remote_ips))
+            self._anomaly.update_connections(connections)
 
     # ── Port Scanner ───────────────────────────────────────────
 
@@ -310,10 +308,10 @@ class NetworkMonitorApp:
         )
         self._capture_worker.dns_packet.connect(self._set_defense.check_dns_query)
 
-        # Wire DNS monitor anomalies to security view
+        # Wire DNS monitor anomalies to anomaly detector
         self._dns_monitor.dns_stats_updated.connect(
-            lambda stats: self._anomaly.update_metric(
-                "dns_rate", stats.get("queries_per_min", 0)
+            lambda stats: self._anomaly.update_dns_rate(
+                stats.get("queries_per_min", 0)
             )
         )
 
@@ -343,7 +341,7 @@ class NetworkMonitorApp:
 
         # Feed anomaly detector with packet rate
         if hasattr(self, "_anomaly"):
-            self._anomaly.update_metric("packet_rate", stats.get("total_packets", 0))
+            self._anomaly.update_packet_rate(stats.get("total_packets", 0))
 
     # ── Alerts ─────────────────────────────────────────────────
 

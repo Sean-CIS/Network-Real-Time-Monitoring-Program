@@ -301,17 +301,13 @@ class NetworkMonitorApp:
 
         # Wire DNS packets
         self._capture_worker.dns_packet.connect(self._dns_monitor.process_dns)
-        self._capture_worker.dns_packet.connect(
-            lambda pkt: self._threat_intel.check_domain(
-                pkt.get("dns_query", ""), pkt.get("src", "")
-            )
-        )
+        self._capture_worker.dns_packet.connect(self._threat_intel.check_domain)
         self._capture_worker.dns_packet.connect(self._set_defense.check_dns_query)
 
         # Wire DNS monitor anomalies to anomaly detector
         self._dns_monitor.dns_stats_updated.connect(
             lambda stats: self._anomaly.update_dns_rate(
-                stats.get("queries_per_min", 0)
+                stats.get("query_rate", 0) * 60  # convert per-sec to per-min
             )
         )
 

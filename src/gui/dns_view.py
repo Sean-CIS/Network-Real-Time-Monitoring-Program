@@ -147,9 +147,12 @@ class DNSView(QWidget):
         """Update DNS statistics cards."""
         self._card_total.set_value(str(stats.get("total_queries", 0)))
         self._card_unique.set_value(str(stats.get("unique_domains", 0)))
-        self._card_suspicious.set_value(str(stats.get("suspicious_count", 0)))
-        self._card_nx.set_value(str(stats.get("nx_count", 0)))
-        self._card_rate.set_value(f"{stats.get('queries_per_min', 0):.0f}")
+        self._card_suspicious.set_value(str(stats.get("suspicious", stats.get("suspicious_count", 0))))
+        self._card_nx.set_value(str(stats.get("nx_domains", stats.get("nx_count", 0))))
+
+        # Query rate — dns_monitor emits "query_rate" (per-sec float)
+        query_rate = stats.get("query_rate", stats.get("queries_per_min", 0))
+        self._card_rate.set_value(f"{query_rate * 60:.0f}")
 
         # Top query type
         qtypes = stats.get("query_types", {})
@@ -157,22 +160,22 @@ class DNSView(QWidget):
             top = max(qtypes, key=qtypes.get)
             self._card_top_type.set_value(top)
 
-        # Top domains
-        top_domains = stats.get("top_domains", {})
+        # Top domains — may be list of (domain, count) tuples or dict
+        top_domains = stats.get("top_domains", [])
         if top_domains:
-            sorted_domains = sorted(top_domains.items(), key=lambda x: x[1], reverse=True)[:20]
-            self._top_domains_table.setRowCount(len(sorted_domains))
-            suspicious_domains = stats.get("suspicious_domains", set())
-            for row, (domain, count) in enumerate(sorted_domains):
-                self._top_domains_table.setItem(row, 0, QTableWidgetItem(domain))
+            # Normalize: could be list of tuples or dict
+            if isinstance(top_domains, dict):
+                domain_list = sorted(top_domains.items(), key=lambda x: x[1], reverse=True)[:20]
+            else:
+                # Already a list of (domain, count) tuples
+                domain_list = top_domains[:20]
+
+            self._top_domains_table.setRowCount(len(domain_list))
+            for row, (domain, count) in enumerate(domain_list):
+                self._top_domains_table.setItem(row, 0, QTableWidgetItem(str(domain)))
                 self._top_domains_table.setItem(row, 1, QTableWidgetItem(str(count)))
-                status = "SUSPICIOUS" if domain in suspicious_domains else "Normal"
-                status_item = QTableWidgetItem(status)
-                if status == "SUSPICIOUS":
-                    status_item.setForeground(QColor("#f38ba8"))
+                status_item = QTableWidgetItem("Normal")
                 self._top_domains_table.setItem(row, 2, status_item)
 
         # Chart data
-        total_rate = stats.get("queries_per_min", 0) / 60.0  # per sec
-        suspicious_rate = stats.get("suspicious_count", 0)
-        self._dns_chart.add_data_point([total_rate, suspicious_rate * 0.01])
+        self._dns_chart.add_data_point([query_rate, stats.get("suspicious", 0) * 0.01])

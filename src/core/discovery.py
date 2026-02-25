@@ -120,14 +120,18 @@ class DiscoveryWorker(QThread):
 
         # Try system ping if available
         if shutil.which("ping"):
-            param = "-n" if platform.system().lower() == "windows" else "-c"
+            is_windows = platform.system().lower() == "windows"
+            count_flag = "-n" if is_windows else "-c"
+            # Windows: -w timeout in ms; Linux: -W timeout in seconds
+            timeout_flag = "-w" if is_windows else "-W"
+            timeout_val = "500" if is_windows else "1"
             for host in network.hosts():
                 host_str = str(host)
                 self.scan_status.emit(f"Pinging {host_str}...")
                 try:
                     result = subprocess.run(
-                        ["ping", param, "1", "-W", "1", host_str],
-                        capture_output=True, text=True, timeout=2,
+                        ["ping", count_flag, "1", timeout_flag, timeout_val, host_str],
+                        capture_output=True, text=True, timeout=3,
                     )
                     if result.returncode == 0:
                         devices.append({
@@ -138,7 +142,7 @@ class DiscoveryWorker(QThread):
                             "os_info": "",
                             "is_online": True,
                         })
-                except (subprocess.TimeoutExpired, OSError):
+                except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
                     continue
             return devices
 

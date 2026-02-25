@@ -62,6 +62,13 @@ class NetworkMonitorApp:
         self._init_dns_view()
         self._init_world_map_timer()
 
+        # Auto-populate topology with gateway node on startup
+        gateway_ip = self._network_info.get("gateway_ip", "")
+        if gateway_ip:
+            self._window.dashboard_view.update_topology(
+                [], gateway_ip, set()
+            )
+
     # ── Bandwidth ──────────────────────────────────────────────
 
     def _init_bandwidth(self):
@@ -469,9 +476,15 @@ class NetworkMonitorApp:
 
     @Slot(list)
     def _on_connections_data(self, conns: list):
-        """Feed connection count to baseline."""
+        """Feed connection count to baseline and update dashboard state chart."""
         if hasattr(self, "_baseline"):
             self._baseline.feed_connection_count(len(conns))
+        # Feed connection state counts to dashboard ring chart
+        state_counts: dict[str, int] = {}
+        for c in conns:
+            state = c.get("state", "OTHER")
+            state_counts[state] = state_counts.get(state, 0) + 1
+        self._window.dashboard_view.update_connection_states(state_counts)
 
     @Slot(dict)
     def _on_new_destination(self, dest: dict):

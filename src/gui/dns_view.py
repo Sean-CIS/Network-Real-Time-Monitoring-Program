@@ -24,6 +24,12 @@ class DNSView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
+        layout.setSpacing(4)
+        layout.setContentsMargins(6, 4, 6, 4)
+
+        title = QLabel("[ DNS HISTORY ]")
+        title.setStyleSheet(theme.VIEW_TITLE)
+        layout.addWidget(title)
 
         # Search row
         search_row = QHBoxLayout()

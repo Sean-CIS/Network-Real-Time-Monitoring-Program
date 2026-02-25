@@ -15,10 +15,12 @@ BG_ELEVATED = "#112211"      # Slightly elevated surfaces
 BG_ALTERNATE = "#070d07"     # Table alternate row
 BG_SELECTED = "#1a3a1a"      # Selected items
 BG_INPUT = "#0d1a0d"         # Text input fields
+BG_PANEL = "#081008"         # Dark panel background
 
 # Borders
 BORDER = "#1a3a1a"           # Standard borders
 BORDER_DIM = "#112211"       # Dim borders
+BORDER_BRIGHT = "#2a5a2a"    # Bright accent borders
 
 # Phosphor greens
 GREEN = "#00ff41"            # Primary phosphor green — main text
@@ -53,14 +55,27 @@ PIE_COLORS = [
 TABLE_STYLE = f"""
     QTableWidget {{
         background-color: {BG_PRIMARY}; color: {GREEN};
-        gridline-color: {BORDER}; border: none;
+        gridline-color: {BORDER_DIM}; border: 1px solid {BORDER};
         font-family: "Courier New", "Consolas", monospace;
+        font-size: 12px;
     }}
-    QTableWidget::item:selected {{ background-color: {BG_SELECTED}; }}
+    QTableWidget::item {{
+        padding: 3px 6px;
+        border-bottom: 1px solid {BORDER_DIM};
+    }}
+    QTableWidget::item:selected {{
+        background-color: {BG_SELECTED};
+        color: {GREEN};
+    }}
+    QTableWidget::item:hover {{
+        background-color: {BG_ELEVATED};
+    }}
     QHeaderView::section {{
-        background-color: {BG_SURFACE}; color: {GREEN};
-        padding: 6px; border: 1px solid {BORDER}; font-weight: bold;
+        background-color: {BG_SURFACE}; color: {GREEN_DIM};
+        padding: 5px 8px; border: none; border-bottom: 2px solid {GREEN_DARK};
+        border-right: 1px solid {BORDER_DIM}; font-weight: bold;
         font-family: "Courier New", "Consolas", monospace;
+        font-size: 11px;
     }}
     QTableWidget::item:alternate {{ background-color: {BG_ALTERNATE}; }}
 """
@@ -120,6 +135,30 @@ CONTEXT_MENU = (
     f"QMenu::item:selected {{ background-color: {BG_SELECTED}; }}"
 )
 
+# ── View-level Styling ──────────────────────────────────────────────────────
+
+VIEW_TITLE = (
+    f"color: {GREEN}; font-size: 14px; font-weight: bold; "
+    f"border-bottom: 1px solid {GREEN_DARK}; padding: 4px 0px 3px 0px;"
+)
+
+SECTION_LABEL = (
+    f"font-size: 10px; font-weight: bold; color: {GREEN_MUTED}; "
+    f"background: transparent; border: none; padding: 2px 0px;"
+)
+
+PANEL_FRAME = (
+    f"QFrame {{ background-color: {BG_PANEL}; "
+    f"border: 1px solid {BORDER}; border-radius: 2px; padding: 6px; }}"
+)
+
+# ── Status badge colors ────────────────────────────────────────────────────
+
+BADGE_ONLINE = f"color: {GREEN}; font-weight: bold;"
+BADGE_OFFLINE = f"color: {RED}; font-weight: bold;"
+BADGE_WARNING = f"color: {AMBER}; font-weight: bold;"
+BADGE_INFO = f"color: {CYAN}; font-weight: bold;"
+
 
 # ── Global Application Theme ─────────────────────────────────────────────────
 
@@ -143,6 +182,9 @@ GLOBAL_STYLESHEET = f"""
         border-radius: 2px;
         padding: 6px;
     }}
+    QLineEdit:focus {{
+        border: 1px solid {GREEN_DARK};
+    }}
     QComboBox {{
         background-color: {BG_INPUT};
         color: {GREEN};
@@ -157,6 +199,14 @@ GLOBAL_STYLESHEET = f"""
         background-color: {BG_SURFACE};
         color: {GREEN};
         selection-background-color: {BG_SELECTED};
+    }}
+    QSplitter::handle {{
+        background-color: {BORDER};
+        width: 2px;
+        height: 2px;
+    }}
+    QSplitter::handle:hover {{
+        background-color: {GREEN_DARK};
     }}
     QScrollBar:vertical {{
         background: {BG_PRIMARY};
@@ -174,6 +224,14 @@ GLOBAL_STYLESHEET = f"""
         background: {BORDER};
         border-radius: 5px;
     }}
+    QToolTip {{
+        background-color: {BG_SURFACE};
+        color: {GREEN};
+        border: 1px solid {GREEN_DARK};
+        padding: 4px;
+        font-family: "Courier New", "Consolas", monospace;
+        font-size: 11px;
+    }}
 """
 
 TAB_STYLESHEET = f"""
@@ -184,7 +242,7 @@ TAB_STYLESHEET = f"""
     QTabBar::tab {{
         background-color: {BG_SURFACE};
         color: {GREEN_MUTED};
-        padding: 10px 20px;
+        padding: 8px 18px;
         margin-right: 2px;
         border-top-left-radius: 2px;
         border-top-right-radius: 2px;
@@ -192,10 +250,12 @@ TAB_STYLESHEET = f"""
         border-bottom: none;
         font-family: "Courier New", "Consolas", monospace;
         font-weight: bold;
+        font-size: 11px;
     }}
     QTabBar::tab:selected {{
         background-color: {BG_SELECTED};
         color: {GREEN};
+        border-top: 2px solid {GREEN_DARK};
     }}
     QTabBar::tab:hover {{
         background-color: {BG_ELEVATED};

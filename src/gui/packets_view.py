@@ -32,6 +32,13 @@ class PacketsView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
+        layout.setSpacing(4)
+        layout.setContentsMargins(6, 4, 6, 4)
+
+        # View title header
+        title = QLabel("[ PACKET CAPTURE ]")
+        title.setStyleSheet(theme.VIEW_TITLE)
+        layout.addWidget(title)
 
         # Controls row 1: capture controls
         controls = QHBoxLayout()
@@ -117,13 +124,13 @@ class PacketsView(QWidget):
         layout.addWidget(self._talkers_table)
 
         # Protocol distribution (collapsible)
-        self._proto_dist_header = QPushButton("\u25b6 Protocol Distribution")
+        self._proto_dist_header = QPushButton("\u25bc Protocol Distribution")
         self._proto_dist_header.setStyleSheet(theme.COLLAPSIBLE_HEADER)
         self._proto_dist_header.clicked.connect(self._toggle_proto_dist)
         layout.addWidget(self._proto_dist_header)
 
         self._proto_pie = RingChart(title="Protocol Distribution")
-        self._proto_pie.setVisible(False)
+        self._proto_pie.setVisible(True)
         layout.addWidget(self._proto_pie)
 
         # Protocol rate chart (compact height)

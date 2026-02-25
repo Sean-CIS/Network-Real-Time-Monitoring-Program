@@ -3,6 +3,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
+    QLabel,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -18,6 +19,12 @@ class AlertsView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
+        layout.setSpacing(4)
+        layout.setContentsMargins(6, 4, 6, 4)
+
+        title = QLabel("[ ALERTS ]")
+        title.setStyleSheet(theme.VIEW_TITLE)
+        layout.addWidget(title)
 
         # Controls
         controls = QHBoxLayout()

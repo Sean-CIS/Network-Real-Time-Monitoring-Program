@@ -1,6 +1,7 @@
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import (
+    QFrame,
     QHBoxLayout,
     QLabel,
     QSplitter,
@@ -11,6 +12,7 @@ from PySide6.QtWidgets import (
 from src.gui import theme
 from src.gui.widgets.gauge import RadialGauge
 from src.gui.widgets.live_chart import LiveChart
+from src.gui.widgets.ring_chart import RingChart
 from src.gui.widgets.stat_card import StatCard
 from src.gui.widgets.topology_map import TopologyMapWidget
 from src.gui.widgets.traffic_heatmap import TrafficHeatmap
@@ -28,7 +30,7 @@ class SecurityTimeline(QWidget):
         super().__init__(parent)
         self.setMinimumHeight(60)
         self.setMaximumHeight(80)
-        self._hourly_data: list[dict] = []  # [{hour, critical, warning, info}]
+        self._hourly_data: list[dict] = []
 
     def set_data(self, hourly: list[dict]):
         self._hourly_data = hourly
@@ -66,7 +68,6 @@ class SecurityTimeline(QWidget):
                 color,
             )
 
-        # Draw hour labels every 6 hours
         painter.setPen(QColor(theme.GREEN_MUTED))
         for i, d in enumerate(self._hourly_data):
             hr = d.get("hour", i)
@@ -78,83 +79,117 @@ class SecurityTimeline(QWidget):
         painter.end()
 
 
+def _make_separator():
+    sep = QFrame()
+    sep.setFrameShape(QFrame.HLine)
+    sep.setStyleSheet(f"background-color: {theme.GREEN_DARK}; max-height: 1px;")
+    return sep
+
+
 class DashboardView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
-        layout.setSpacing(4)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(3)
+        layout.setContentsMargins(6, 4, 6, 4)
 
-        # ── Row 0: Title row with baseline mode indicator ──────────
+        # ── Row 0: Title row ────────────────────────────────────────
         title_row = QHBoxLayout()
+        title_row.setSpacing(12)
+
         title = QLabel("[ NETWORK MONITOR DASHBOARD ]")
         title.setStyleSheet(
-            f"color: {theme.GREEN}; font-size: 18px; font-weight: bold; padding: 4px;"
+            f"color: {theme.GREEN}; font-size: 15px; font-weight: bold; padding: 2px;"
         )
         title_row.addWidget(title)
 
         self._baseline_indicator = QLabel("")
         self._baseline_indicator.setStyleSheet(
-            f"color: {theme.AMBER}; font-size: 12px; padding: 4px;"
+            f"color: {theme.AMBER}; font-size: 11px; padding: 2px;"
         )
         title_row.addWidget(self._baseline_indicator)
         title_row.addStretch()
-        layout.addLayout(title_row)
 
-        # ── Row 1: Gauges + compact info cards ─────────────────────
+        # Compact network info inline
+        self._card_local_ip_label = QLabel("IP: \u2014")
+        self._card_local_ip_label.setStyleSheet(
+            f"color: {theme.GREEN_DIM}; font-size: 11px;"
+        )
+        self._card_subnet_label = QLabel("NET: \u2014")
+        self._card_subnet_label.setStyleSheet(
+            f"color: {theme.GREEN_DIM}; font-size: 11px;"
+        )
+        title_row.addWidget(self._card_local_ip_label)
+        title_row.addWidget(self._card_subnet_label)
+
+        layout.addLayout(title_row)
+        layout.addWidget(_make_separator())
+
+        # ── Row 1: Gauges + compact side panel ──────────────────────
         gauge_row = QHBoxLayout()
-        gauge_row.setSpacing(8)
+        gauge_row.setSpacing(4)
 
         self._gauge_score = RadialGauge(
             title="SECURITY", unit="pts", min_val=0, max_val=100
         )
         self._gauge_score.set_value(100)
-
         self._gauge_bw = RadialGauge(
             title="BANDWIDTH", unit="%", min_val=0, max_val=100
         )
-
         self._gauge_latency = RadialGauge(
             title="LATENCY", unit="ms", min_val=0, max_val=200
         )
-
         self._gauge_threat = RadialGauge(
             title="THREAT", unit="", min_val=0, max_val=100
         )
 
-        gauge_row.addWidget(self._gauge_score)
-        gauge_row.addWidget(self._gauge_bw)
-        gauge_row.addWidget(self._gauge_latency)
-        gauge_row.addWidget(self._gauge_threat)
+        gauge_row.addWidget(self._gauge_score, stretch=1)
+        gauge_row.addWidget(self._gauge_bw, stretch=1)
+        gauge_row.addWidget(self._gauge_latency, stretch=1)
+        gauge_row.addWidget(self._gauge_threat, stretch=1)
 
-        # Compact info cards column
-        cards_col = QVBoxLayout()
-        cards_col.setSpacing(2)
-        self._card_local_ip = StatCard("Local IP", "\u2014")
-        self._card_subnet = StatCard("Subnet", "\u2014")
+        # Side panel: compact stat cards + connection ring chart
+        side_panel = QVBoxLayout()
+        side_panel.setSpacing(2)
+
         self._card_devices = StatCard("Devices", "0", sparkline=True)
+        self._card_devices.setMaximumWidth(170)
+        self._card_devices.setMaximumHeight(70)
         self._card_alerts = StatCard("Alerts", "0", sparkline=True)
-        cards_col.addWidget(self._card_local_ip)
-        cards_col.addWidget(self._card_subnet)
-        cards_col.addWidget(self._card_devices)
-        cards_col.addWidget(self._card_alerts)
+        self._card_alerts.setMaximumWidth(170)
+        self._card_alerts.setMaximumHeight(70)
 
-        gauge_row.addLayout(cards_col)
+        # Mini connection state ring chart
+        self._conn_ring = RingChart(title="States")
+        self._conn_ring.setMaximumWidth(170)
+        self._conn_ring.setMaximumHeight(110)
+
+        side_panel.addWidget(self._card_devices)
+        side_panel.addWidget(self._card_alerts)
+        side_panel.addWidget(self._conn_ring)
+        side_panel.addStretch()
+
+        gauge_row.addLayout(side_panel, stretch=0)
         layout.addLayout(gauge_row)
 
         # ── Row 2: Topology + World Map (main visual area) ────────
         map_splitter = QSplitter(Qt.Horizontal)
+        map_splitter.setChildrenCollapsible(False)
 
         self._topology_map = TopologyMapWidget()
+        self._topology_map.setMinimumHeight(180)
         self._world_map = WorldMapWidget()
+        self._world_map.setMinimumHeight(180)
 
         map_splitter.addWidget(self._topology_map)
         map_splitter.addWidget(self._world_map)
-        map_splitter.setSizes([400, 600])
+        map_splitter.setStretchFactor(0, 2)
+        map_splitter.setStretchFactor(1, 3)
         layout.addWidget(map_splitter, stretch=3)
 
         # ── Row 3: Charts + Timeline/Heatmap ──────────────────────
         bottom_splitter = QSplitter(Qt.Horizontal)
+        bottom_splitter.setChildrenCollapsible(False)
 
         # Left: BW + Latency charts stacked
         charts_widget = QWidget()
@@ -185,32 +220,33 @@ class DashboardView(QWidget):
         sec_layout.setContentsMargins(0, 0, 0, 0)
         sec_layout.setSpacing(2)
 
-        timeline_label = QLabel("Last 24h Security Events")
-        timeline_label.setStyleSheet(
-            f"color: {theme.GREEN}; font-size: 11px; font-weight: bold; padding: 2px 0 0 0;"
-        )
+        timeline_label = QLabel("SECURITY EVENTS (24H)")
+        timeline_label.setStyleSheet(theme.SECTION_LABEL)
         sec_layout.addWidget(timeline_label)
         self._security_timeline = SecurityTimeline()
         sec_layout.addWidget(self._security_timeline)
 
+        heatmap_label = QLabel("TRAFFIC HEATMAP")
+        heatmap_label.setStyleSheet(theme.SECTION_LABEL)
+        sec_layout.addWidget(heatmap_label)
         self._traffic_heatmap = TrafficHeatmap()
         sec_layout.addWidget(self._traffic_heatmap)
 
         bottom_splitter.addWidget(charts_widget)
         bottom_splitter.addWidget(sec_widget)
-        bottom_splitter.setSizes([500, 500])
+        bottom_splitter.setStretchFactor(0, 3)
+        bottom_splitter.setStretchFactor(1, 2)
         layout.addWidget(bottom_splitter, stretch=2)
 
         self._use_mb = False
 
-    # ── Public API (same signatures as before + new methods) ──────
+    # ── Public API ────────────────────────────────────────────────
 
     def update_network_info(self, local_ip: str, subnet: str):
-        self._card_local_ip.set_value(local_ip)
-        self._card_subnet.set_value(subnet)
+        self._card_local_ip_label.setText(f"IP: {local_ip}")
+        self._card_subnet_label.setText(f"NET: {subnet}")
 
     def update_bandwidth_summary(self, speed_down: float, speed_up: float):
-        # Stat cards removed — gauges handle visual display
         peak = max(speed_down, speed_up)
         if peak >= _MB_THRESHOLD and not self._use_mb:
             self._use_mb = True
@@ -242,7 +278,6 @@ class DashboardView(QWidget):
 
     def update_security_score(self, score: int):
         self._gauge_score.set_value(score)
-        # Also update threat gauge (inverse of score)
         self._gauge_threat.set_value(100 - score)
 
     def update_security_timeline(self, hourly_data: list[dict]):
@@ -255,31 +290,31 @@ class DashboardView(QWidget):
         if mode == "learning":
             self._baseline_indicator.setText("[BASELINE: LEARNING]")
             self._baseline_indicator.setStyleSheet(
-                f"color: {theme.AMBER}; font-size: 12px; padding: 4px;"
+                f"color: {theme.AMBER}; font-size: 11px; padding: 2px;"
             )
         elif mode == "monitoring":
-            self._baseline_indicator.setText("[BASELINE: MONITORING]")
+            self._baseline_indicator.setText("[BASELINE: ACTIVE]")
             self._baseline_indicator.setStyleSheet(
-                f"color: {theme.GREEN}; font-size: 12px; padding: 4px;"
+                f"color: {theme.GREEN}; font-size: 11px; padding: 2px;"
             )
         else:
             self._baseline_indicator.setText("")
 
-    # ── New SOC dashboard methods ─────────────────────────────────
+    def update_connection_states(self, state_counts: dict[str, int]):
+        """Update the connection state ring chart."""
+        self._conn_ring.set_data(state_counts)
+
+    # ── SOC dashboard methods ─────────────────────────────────────
 
     def update_topology(self, devices: list, gateway_ip: str,
                         trusted_macs: set | None = None):
-        """Update the network topology map with discovered devices."""
         self._topology_map.update_devices(devices, gateway_ip, trusted_macs)
 
     def update_world_map(self, connections: list[dict]):
-        """Update geo-IP world map with connection arcs."""
         self._world_map.update_connections(connections)
 
     def update_gauge_bandwidth(self, utilization_pct: float):
-        """Set bandwidth gauge (0-100%)."""
         self._gauge_bw.set_value(min(utilization_pct, 100))
 
     def set_world_map_local_coords(self, lat: float, lon: float):
-        """Set the local position marker on the world map."""
         self._world_map.set_local_coords(lat, lon)

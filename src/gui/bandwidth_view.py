@@ -1,3 +1,4 @@
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -6,6 +7,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.gui import theme
 from src.gui.widgets.live_chart import LiveChart
 from src.gui.widgets.stat_card import StatCard
 
@@ -28,29 +30,83 @@ def _format_bytes(total_bytes: int) -> str:
     return f"{total_bytes} B"
 
 
-# Threshold (in bytes/s) above which the chart switches from KB/s to MB/s
-_MB_THRESHOLD = 1_000_000  # 1 MB/s
+_MB_THRESHOLD = 1_000_000
+
+
+class UtilizationBar(QWidget):
+    """Horizontal bar showing bandwidth utilization percentage."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumHeight(18)
+        self.setMaximumHeight(22)
+        self._pct = 0.0
+        self._label = ""
+
+    def set_value(self, pct: float, label: str = ""):
+        self._pct = max(0.0, min(100.0, pct))
+        self._label = label
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        w = self.width()
+        h = self.height()
+
+        painter.fillRect(0, 0, w, h, QColor(theme.BG_SURFACE))
+        painter.setPen(QColor(theme.BORDER))
+        painter.drawRect(0, 0, w - 1, h - 1)
+
+        fill_w = int(w * self._pct / 100)
+        if self._pct > 80:
+            color = QColor(theme.RED)
+        elif self._pct > 50:
+            color = QColor(theme.AMBER)
+        else:
+            color = QColor(theme.GREEN)
+        color.setAlpha(180)
+        painter.fillRect(1, 1, fill_w - 2, h - 2, color)
+
+        painter.setPen(QColor(theme.GREEN))
+        text = self._label or f"{self._pct:.1f}%"
+        painter.drawText(4, h - 5, text)
+        painter.end()
 
 
 class BandwidthView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
+        layout.setSpacing(4)
+        layout.setContentsMargins(6, 4, 6, 4)
 
-        # Header with interface selector
+        # Header
         header = QHBoxLayout()
+        title = QLabel("[ BANDWIDTH MONITOR ]")
+        title.setStyleSheet(theme.VIEW_TITLE)
+        header.addWidget(title)
+        header.addStretch()
         header.addWidget(QLabel("Interface:"))
         self._interface_combo = QComboBox()
         self._interface_combo.setMinimumWidth(200)
         self._interface_combo.currentTextChanged.connect(self._on_interface_changed)
         header.addWidget(self._interface_combo)
-        header.addStretch()
         layout.addLayout(header)
 
-        # Stat cards row
+        # Utilization bar
+        util_row = QHBoxLayout()
+        util_label = QLabel("UTILIZATION")
+        util_label.setStyleSheet(theme.SECTION_LABEL)
+        util_row.addWidget(util_label)
+        self._util_bar = UtilizationBar()
+        util_row.addWidget(self._util_bar, stretch=1)
+        layout.addLayout(util_row)
+
+        # Stat cards
         cards_layout = QHBoxLayout()
-        self._card_download = StatCard("Download Speed", "\u2014")
-        self._card_upload = StatCard("Upload Speed", "\u2014")
+        self._card_download = StatCard("Download Speed", "\u2014", sparkline=True)
+        self._card_upload = StatCard("Upload Speed", "\u2014", sparkline=True)
         self._card_total_down = StatCard("Total Downloaded", "\u2014")
         self._card_total_up = StatCard("Total Uploaded", "\u2014")
         cards_layout.addWidget(self._card_download)
@@ -86,9 +142,7 @@ class BandwidthView(QWidget):
             self._current_interface = interfaces[0]
 
     def update_bandwidth(self, data: dict):
-        """Called with data = {interface: {speed_up, speed_down, bytes_sent, bytes_recv}}"""
         self._all_data = data
-
         interfaces = list(data.keys())
         if interfaces and self._interface_combo.count() == 0:
             self.set_interfaces(interfaces)
@@ -100,11 +154,21 @@ class BandwidthView(QWidget):
             speed_up = d.get("speed_up", 0)
 
             self._card_download.set_value(_format_speed(speed_down))
+            self._card_download.add_spark_point(speed_down / 1000)
             self._card_upload.set_value(_format_speed(speed_up))
+            self._card_upload.add_spark_point(speed_up / 1000)
             self._card_total_down.set_value(_format_bytes(d.get("bytes_recv", 0)))
             self._card_total_up.set_value(_format_bytes(d.get("bytes_sent", 0)))
 
-            # Auto-scale: switch between KB/s and MB/s
+            # Utilization bar
+            total_bps = (speed_down + speed_up) * 8
+            util_pct = min(100.0, total_bps / 1_000_000_000 * 100)
+            self._util_bar.set_value(
+                util_pct,
+                f"{_format_speed(speed_down)} \u2193  {_format_speed(speed_up)} \u2191  ({util_pct:.1f}%)"
+            )
+
+            # Auto-scale
             peak = max(speed_down, speed_up)
             if peak >= _MB_THRESHOLD and not self._use_mb:
                 self._use_mb = True
